@@ -1,0 +1,27 @@
+{
+  "name": "德州扑克计算器 Pro",
+  "short_name": "扑克计算器",
+  "description": "专业级德州扑克胜率计算器，支持蒙特卡洛模拟、精确 Outs 计算、EV 分析",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#10b981",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["utilities", "games"],
+  "screenshots": [],
+  "prefer_related_applications": false
+}
