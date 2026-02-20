@@ -372,3 +372,180 @@ export function comboSpecificCount(combo: HandCombo): number {
     if (combo.endsWith('o')) return 12; // 非同花
     return 0;
 }
+
+// ============================================
+// 5. 权重 Range 引擎 (Phase 1 新增)
+// ============================================
+
+import { CardIndex, makeCard, DeckMask, hasCard } from './card';
+
+/** 权重 Range: combo → 权重 (0-100) */
+export type WeightedRange = Map<HandCombo, number>;
+
+/** 展开后的具体牌组合 (带权重, 使用 CardIndex) */
+export interface WeightedCombo {
+    card1: CardIndex;
+    card2: CardIndex;
+    combo: HandCombo;
+    weight: number; // 0-100
+}
+
+// suit 字符到 index 的映射
+const SUIT_INDEX: Record<string, number> = { 'c': 0, 'd': 1, 'h': 2, 's': 3 };
+
+/**
+ * 解析权重 Range 字符串
+ * 支持: "AA:80, AKs:60+, JJ+, 22-55:50"
+ * 冒号后面的数字是权重 (0-100)，不指定则默认 100
+ */
+export function parseWeightedRange(rangeStr: string): WeightedRange {
+    const result: WeightedRange = new Map();
+    if (!rangeStr || rangeStr.trim() === '') return result;
+
+    const tokens = rangeStr
+        .split(',')
+        .map(t => t.trim())
+        .filter(t => t.length > 0);
+
+    for (const token of tokens) {
+        // 分离权重后缀: "AA:80" → ["AA", "80"]
+        // 也可能是 "JJ+:60" 或 "22-55:50"
+        let comboStr = token;
+        let weight = 100;
+
+        const colonIdx = token.lastIndexOf(':');
+        if (colonIdx > 0) {
+            const weightStr = token.slice(colonIdx + 1);
+            const parsed = parseInt(weightStr);
+            if (!isNaN(parsed) && parsed >= 0 && parsed <= 100) {
+                weight = parsed;
+                comboStr = token.slice(0, colonIdx);
+            }
+        }
+
+        // 用旧解析器展开 combo
+        const expanded = parseRangeString(comboStr);
+        for (const combo of expanded) {
+            // 如果已存在，取较大的权重
+            const existing = result.get(combo);
+            if (existing === undefined || weight > existing) {
+                result.set(combo, weight);
+            }
+        }
+    }
+
+    return result;
+}
+
+/**
+ * 将 WeightedRange 展开为具体的 CardIndex 牌组合
+ * 排除 deadCards (已在公共牌中的牌)
+ */
+export function expandWeightedCombos(
+    range: WeightedRange,
+    deadMask?: DeckMask
+): WeightedCombo[] {
+    const results: WeightedCombo[] = [];
+
+    for (const [combo, weight] of range) {
+        if (weight <= 0) continue;
+
+        if (combo.length === 2 && combo[0] === combo[1]) {
+            // 对子: 6 combos
+            const rankIdx = RANK_ORDER.indexOf(combo[0] as Rank);
+            const r = 12 - rankIdx; // 转为 card.ts 的 rank (0=2, 12=A)
+            for (let s1 = 0; s1 < 4; s1++) {
+                for (let s2 = s1 + 1; s2 < 4; s2++) {
+                    const c1 = makeCard(r, s1);
+                    const c2 = makeCard(r, s2);
+                    if (deadMask && (!hasCard(deadMask, c1) || !hasCard(deadMask, c2))) continue;
+                    if (!deadMask) {
+                        results.push({ card1: c1, card2: c2, combo, weight });
+                    } else {
+                        results.push({ card1: c1, card2: c2, combo, weight });
+                    }
+                }
+            }
+        } else if (combo.length === 3 && combo[2] === 's') {
+            // 同花: 4 combos
+            const r1 = 12 - RANK_ORDER.indexOf(combo[0] as Rank);
+            const r2 = 12 - RANK_ORDER.indexOf(combo[1] as Rank);
+            for (let s = 0; s < 4; s++) {
+                const c1 = makeCard(r1, s);
+                const c2 = makeCard(r2, s);
+                if (deadMask && (!hasCard(deadMask, c1) || !hasCard(deadMask, c2))) continue;
+                results.push({ card1: c1, card2: c2, combo, weight });
+            }
+        } else if (combo.length === 3 && combo[2] === 'o') {
+            // 非同花: 12 combos
+            const r1 = 12 - RANK_ORDER.indexOf(combo[0] as Rank);
+            const r2 = 12 - RANK_ORDER.indexOf(combo[1] as Rank);
+            for (let s1 = 0; s1 < 4; s1++) {
+                for (let s2 = 0; s2 < 4; s2++) {
+                    if (s1 === s2) continue;
+                    const c1 = makeCard(r1, s1);
+                    const c2 = makeCard(r2, s2);
+                    if (deadMask && (!hasCard(deadMask, c1) || !hasCard(deadMask, c2))) continue;
+                    results.push({ card1: c1, card2: c2, combo, weight });
+                }
+            }
+        }
+    }
+
+    return results;
+}
+
+/**
+ * 从展开的 combos 中按权重概率采样一个可用的 combo
+ * 使用 rejection sampling: 随机选一个 combo, 然后以 weight/100 的概率接受
+ * @param combos 展开的 combo 列表
+ * @param deck 当前可用牌 (bitmask)
+ * @returns 选中的 combo, 或 null 如果所有 combo 都被 block
+ */
+export function sampleWeightedCombo(
+    combos: WeightedCombo[],
+    deck: DeckMask
+): WeightedCombo | null {
+    if (combos.length === 0) return null;
+
+    // 先过滤出可用的 combos
+    const available: WeightedCombo[] = [];
+    for (const c of combos) {
+        if (hasCard(deck, c.card1) && hasCard(deck, c.card2)) {
+            available.push(c);
+        }
+    }
+
+    if (available.length === 0) return null;
+
+    // Rejection sampling (最多尝试 100 次)
+    for (let attempt = 0; attempt < 100; attempt++) {
+        const idx = Math.floor(Math.random() * available.length);
+        const candidate = available[idx];
+
+        // 权重 100 直接接受, 否则按概率
+        if (candidate.weight >= 100 || Math.random() * 100 < candidate.weight) {
+            return candidate;
+        }
+    }
+
+    // Fallback: 直接返回随机一个 (忽略权重)
+    return available[Math.floor(Math.random() * available.length)];
+}
+
+/**
+ * 将 WeightedRange 压缩为字符串 (带权重)
+ */
+export function weightedRangeToString(range: WeightedRange): string {
+    if (range.size === 0) return '';
+
+    const parts: string[] = [];
+    for (const [combo, weight] of range) {
+        if (weight >= 100) {
+            parts.push(combo);
+        } else {
+            parts.push(`${combo}:${weight}`);
+        }
+    }
+    return parts.join(', ');
+}

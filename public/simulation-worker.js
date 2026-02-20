@@ -1,163 +1,240 @@
 // ============================================
-// Monte Carlo 模拟 Web Worker（独立线程）
-// Range vs Range 升级版
-// + 死锁熔断机制防止无限循环
+// Monte Carlo Web Worker v2
+// 高性能引擎: CardIndex + Bitmask Deck
+// 支持: 权重 Range, 多玩家独立 Range
 // ============================================
 
-// 点数值映射
-const RANK_VALUES = {
-  'A': 14, 'K': 13, 'Q': 12, 'J': 11, 'T': 10,
-  '9': 9, '8': 8, '7': 7, '6': 6, '5': 5, '4': 4, '3': 3, '2': 2
+// ============================================
+// 1. 内联引擎 (Worker 不支持 ES import)
+// ============================================
+
+// --- card.ts 内联 ---
+function makeCard(rank, suit) { return rank * 4 + suit; }
+function cardRank(card) { return card >> 2; }
+function cardSuit(card) { return card & 3; }
+
+function fullDeck() { return [0xFFFFFFFF, 0x000FFFFF]; }
+function hasCard(deck, card) {
+  return card < 32 ? (deck[0] & (1 << card)) !== 0 : (deck[1] & (1 << (card - 32))) !== 0;
+}
+function removeCardFromDeck(deck, card) {
+  if (card < 32) deck[0] &= ~(1 << card);
+  else deck[1] &= ~(1 << (card - 32));
+}
+function cloneDeck(deck) { return [deck[0], deck[1]]; }
+
+function popCount32(n) {
+  n = n - ((n >> 1) & 0x55555555);
+  n = (n & 0x33333333) + ((n >> 2) & 0x33333333);
+  return (((n + (n >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
+}
+function popCount(deck) { return popCount32(deck[0]) + popCount32(deck[1]); }
+
+function drawRandom(deck) {
+  const count = popCount(deck);
+  if (count === 0) return -1;
+  let target = Math.floor(Math.random() * count);
+  let bits = deck[0];
+  while (bits) {
+    const lsb = bits & (-bits);
+    if (target === 0) {
+      const card = Math.clz32(lsb) ^ 31;
+      removeCardFromDeck(deck, card);
+      return card;
+    }
+    target--;
+    bits ^= lsb;
+  }
+  bits = deck[1];
+  while (bits) {
+    const lsb = bits & (-bits);
+    if (target === 0) {
+      const card = (Math.clz32(lsb) ^ 31) + 32;
+      removeCardFromDeck(deck, card);
+      return card;
+    }
+    target--;
+    bits ^= lsb;
+  }
+  return -1;
+}
+
+function drawN(deck, n) {
+  const result = [];
+  for (let i = 0; i < n; i++) {
+    const c = drawRandom(deck);
+    if (c === -1) break;
+    result.push(c);
+  }
+  return result;
+}
+
+// --- evaluator.ts 内联 ---
+const HIGH_CARD = 0, PAIR = 1, TWO_PAIR = 2, THREE_KIND = 3;
+const STRAIGHT = 4, FLUSH = 5, FULL_HOUSE = 6, FOUR_KIND = 7, STRAIGHT_FLUSH = 8;
+
+const HAND_RANK_NAMES = {
+  0: 'High Card', 1: 'Pair', 2: 'Two Pair', 3: 'Three of a Kind',
+  4: 'Straight', 5: 'Flush', 6: 'Full House', 7: 'Four of a Kind',
+  8: 'Straight Flush'
 };
 
-// 花色和点数数组
-const SUITS = ['s', 'h', 'd', 'c'];
-const RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
+function evaluate7(cards) {
+  const rc = new Int8Array(13);
+  const sc = new Int8Array(4);
+  const suitCards = [[], [], [], []];
 
-// ============================================
-// 核心工具函数
-// ============================================
-
-function createDeck() {
-  const deck = [];
-  for (const suit of SUITS) {
-    for (const rank of RANKS) {
-      deck.push({ rank, suit });
-    }
+  for (let i = 0; i < cards.length; i++) {
+    const r = cardRank(cards[i]);
+    const s = cardSuit(cards[i]);
+    rc[r]++;
+    sc[s]++;
+    suitCards[s].push(cards[i]);
   }
-  return deck;
+
+  let flushSuit = -1;
+  for (let s = 0; s < 4; s++) { if (sc[s] >= 5) { flushSuit = s; break; } }
+
+  const straightHigh = findStraightHigh(rc);
+
+  // 同花顺
+  if (flushSuit >= 0 && straightHigh >= 0) {
+    const frc = new Int8Array(13);
+    for (const c of suitCards[flushSuit]) frc[cardRank(c)]++;
+    const sfHigh = findStraightHigh(frc);
+    if (sfHigh >= 0) return STRAIGHT_FLUSH * 1000000 + sfHigh;
+  }
+
+  // 四条
+  const fourR = findNOfAKind(rc, 4);
+  if (fourR >= 0) {
+    const k = findBestKickers(rc, fourR, -1, 1);
+    return FOUR_KIND * 1000000 + fourR * 15 + k[0];
+  }
+
+  // 葫芦
+  const threeR = findNOfAKind(rc, 3);
+  if (threeR >= 0) {
+    const secondThree = findNOfAKindExcl(rc, 3, threeR);
+    const pairR = findNOfAKindExcl(rc, 2, threeR);
+    const bestPair = Math.max(secondThree, pairR);
+    if (bestPair >= 0) return FULL_HOUSE * 1000000 + threeR * 15 + bestPair;
+  }
+
+  // 同花
+  if (flushSuit >= 0) {
+    const fRanks = suitCards[flushSuit].map(c => cardRank(c)).sort((a, b) => b - a).slice(0, 5);
+    return FLUSH * 1000000 + encKickers(fRanks);
+  }
+
+  // 顺子
+  if (straightHigh >= 0) return STRAIGHT * 1000000 + straightHigh;
+
+  // 三条
+  if (threeR >= 0) {
+    const k = findBestKickers(rc, threeR, -1, 2);
+    return THREE_KIND * 1000000 + threeR * 225 + encKickers(k);
+  }
+
+  // 两对 / 一对
+  const pairs = findAllPairs(rc);
+  if (pairs.length >= 2) {
+    const k = findBestKickers(rc, pairs[0], pairs[1], 1);
+    return TWO_PAIR * 1000000 + pairs[0] * 225 + pairs[1] * 15 + k[0];
+  }
+  if (pairs.length === 1) {
+    const k = findBestKickers(rc, pairs[0], -1, 3);
+    return PAIR * 1000000 + pairs[0] * 3375 + encKickers(k);
+  }
+
+  // 高牌
+  const k = findBestKickers(rc, -1, -1, 5);
+  return HIGH_CARD * 1000000 + encKickers(k);
 }
 
-function shuffleDeck(deck) {
-  const shuffled = [...deck];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
+// 预计算顺子 bitmask 模式
+const STRAIGHT_PATS = [
+  { m: 0b1111100000000, h: 14 }, { m: 0b0111110000000, h: 13 },
+  { m: 0b0011111000000, h: 12 }, { m: 0b0001111100000, h: 11 },
+  { m: 0b0000111110000, h: 10 }, { m: 0b0000011111000, h: 9 },
+  { m: 0b0000001111100, h: 8 }, { m: 0b0000000111110, h: 7 },
+  { m: 0b0000000011111, h: 6 }, { m: 0b1000000001111, h: 5 }
+];
+
+function findStraightHigh(rc) {
+  let mask = 0;
+  for (let r = 0; r < 13; r++) { if (rc[r] > 0) mask |= (1 << r); }
+  for (const p of STRAIGHT_PATS) { if ((mask & p.m) === p.m) return p.h; }
+  return -1;
 }
 
-function removeCards(deck, cardsToRemove) {
-  return deck.filter(card =>
-    !cardsToRemove.some(c => c.rank === card.rank && c.suit === card.suit)
-  );
+function findNOfAKind(rc, n) {
+  for (let r = 12; r >= 0; r--) { if (rc[r] >= n) return r; }
+  return -1;
 }
 
-// ============================================
-// 手牌评估算法
-// ============================================
+function findNOfAKindExcl(rc, n, excl) {
+  for (let r = 12; r >= 0; r--) { if (r !== excl && rc[r] >= n) return r; }
+  return -1;
+}
 
-function evaluateHand(holeCards, communityCards) {
-  const allCards = [...holeCards, ...communityCards];
-  const ranks = allCards.map(c => RANK_VALUES[c.rank]);
-  const suits = allCards.map(c => c.suit);
+function findAllPairs(rc) {
+  const p = [];
+  for (let r = 12; r >= 0; r--) { if (rc[r] === 2) p.push(r); }
+  return p;
+}
 
-  const rankCounts = new Map();
-  ranks.forEach(r => rankCounts.set(r, (rankCounts.get(r) || 0) + 1));
-
-  const suitCounts = new Map();
-  suits.forEach(s => suitCounts.set(s, (suitCounts.get(s) || 0) + 1));
-
-  const flushSuit = [...suitCounts.entries()].find(([_, count]) => count >= 5)?.[0];
-  const hasFlush = !!flushSuit;
-
-  const flushCards = hasFlush
-    ? allCards.filter(c => c.suit === flushSuit).map(c => RANK_VALUES[c.rank]).sort((a, b) => b - a)
-    : [];
-
-  const uniqueRanks = [...new Set(ranks)].sort((a, b) => b - a);
-  if (uniqueRanks.includes(14)) {
-    uniqueRanks.push(1);
+function findBestKickers(rc, excl1, excl2, n) {
+  const k = [];
+  for (let r = 12; r >= 0 && k.length < n; r--) {
+    if (rc[r] > 0 && r !== excl1 && r !== excl2) k.push(r);
   }
+  return k;
+}
 
-  let hasStraight = false;
-  let straightHigh = 0;
-  for (let i = 0; i <= uniqueRanks.length - 5; i++) {
-    let consecutive = true;
-    for (let j = 0; j < 4; j++) {
-      if (uniqueRanks[i + j] - uniqueRanks[i + j + 1] !== 1) {
-        consecutive = false;
-        break;
-      }
-    }
-    if (consecutive) {
-      hasStraight = true;
-      straightHigh = uniqueRanks[i];
-      break;
-    }
-  }
-
-  const counts = [...rankCounts.values()].sort((a, b) => b - a);
-  const pairs = counts.filter(c => c === 2).length;
-  const threes = counts.filter(c => c === 3).length;
-  const fours = counts.filter(c => c === 4).length;
-
-  let rank, value = 0;
-
-  if (hasFlush && hasStraight) {
-    const flushRanksSet = new Set(flushCards);
-    let sfHigh = 0;
-    for (let i = 0; i <= flushCards.length - 5; i++) {
-      let consecutive = true;
-      for (let j = 0; j < 4; j++) {
-        if (!flushRanksSet.has(flushCards[i + j] - 1)) {
-          consecutive = false;
-          break;
-        }
-      }
-      if (consecutive) {
-        sfHigh = flushCards[i];
-        break;
-      }
-    }
-    if (sfHigh > 0) {
-      rank = sfHigh === 14 ? 'Royal Flush' : 'Straight Flush';
-      value = 9000000 + sfHigh;
-    } else {
-      rank = 'Flush';
-      value = 5000000 + flushCards.slice(0, 5).reduce((sum, v, i) => sum + v * Math.pow(15, 4 - i), 0);
-    }
-  } else if (fours >= 1) {
-    rank = 'Four of a Kind';
-    const quadRank = [...rankCounts.entries()].find(([_, c]) => c === 4)[0];
-    const kicker = Math.max(...[...rankCounts.entries()].filter(([r, _]) => r !== quadRank).map(([r, _]) => r));
-    value = 7000000 + quadRank * 100 + kicker;
-  } else if (threes >= 1 && pairs >= 1) {
-    rank = 'Full House';
-    const tripRank = [...rankCounts.entries()].filter(([_, c]) => c === 3).map(([r, _]) => r).sort((a, b) => b - a)[0];
-    const pairRank = [...rankCounts.entries()].filter(([_, c]) => c === 2).map(([r, _]) => r).sort((a, b) => b - a)[0];
-    value = 6000000 + tripRank * 100 + pairRank;
-  } else if (hasFlush) {
-    rank = 'Flush';
-    value = 5000000 + flushCards.slice(0, 5).reduce((sum, v, i) => sum + v * Math.pow(15, 4 - i), 0);
-  } else if (hasStraight) {
-    rank = 'Straight';
-    value = 4000000 + straightHigh;
-  } else if (threes >= 1) {
-    rank = 'Three of a Kind';
-    const tripRank = [...rankCounts.entries()].find(([_, c]) => c === 3)[0];
-    value = 3000000 + tripRank * 100;
-  } else if (pairs >= 2) {
-    rank = 'Two Pair';
-    const pairRanks = [...rankCounts.entries()].filter(([_, c]) => c === 2).map(([r, _]) => r).sort((a, b) => b - a);
-    value = 2000000 + pairRanks[0] * 100 + pairRanks[1];
-  } else if (pairs >= 1) {
-    rank = 'Pair';
-    const pairRank = [...rankCounts.entries()].find(([_, c]) => c === 2)[0];
-    value = 1000000 + pairRank * 100;
-  } else {
-    rank = 'High Card';
-    const sortedRanks = ranks.sort((a, b) => b - a).slice(0, 5);
-    value = sortedRanks.reduce((sum, v, i) => sum + v * Math.pow(15, 4 - i), 0);
-  }
-
-  return { rank, value };
+function encKickers(k) {
+  let v = 0;
+  for (let i = 0; i < k.length; i++) v = v * 15 + k[i];
+  return v;
 }
 
 // ============================================
-// 对手范围定义
+// 2. Range 工具 (简化版: 接收预展开的 combos)
 // ============================================
 
+function sampleComboFromList(combos, deck) {
+  // combos = [{ card1, card2, combo, weight }]
+  // 先过滤可用的
+  const avail = [];
+  for (let i = 0; i < combos.length; i++) {
+    if (hasCard(deck, combos[i].card1) && hasCard(deck, combos[i].card2)) {
+      avail.push(combos[i]);
+    }
+  }
+  if (avail.length === 0) return null;
+
+  // Rejection sampling (权重)
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const c = avail[Math.floor(Math.random() * avail.length)];
+    if (c.weight >= 100 || Math.random() * 100 < c.weight) return c;
+  }
+  return avail[Math.floor(Math.random() * avail.length)];
+}
+
+// ============================================
+// 3. 旧协议兼容 (Legacy)
+// ============================================
+
+const RANK_CHARS = '23456789TJQKA';
+const SUIT_CHARS = 'cdhs';
+
+function parseCardObj(obj) {
+  const r = RANK_CHARS.indexOf(obj.rank);
+  const s = SUIT_CHARS.indexOf(obj.suit);
+  return makeCard(r, s);
+}
+
+// Legacy opponent ranges
 const OPPONENT_RANGES = {
   random: [],
   tight: ['AA', 'KK', 'QQ', 'JJ', 'TT', '99', 'AKs', 'AQs', 'AJs', 'ATs', 'AKo', 'AQo', 'KQs', 'KJs', 'QJs', 'JTs'],
@@ -167,385 +244,372 @@ const OPPONENT_RANGES = {
   custom: []
 };
 
-// ============================================
-// 组合解析函数
-// ============================================
+const RANK_ORDER = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
 
-function isComboAvailable(combo, deck) {
-  if (combo.length === 2 && combo[0] === combo[1]) {
-    const rank = combo[0];
-    const availableCards = deck.filter(c => c.rank === rank);
-    return availableCards.length >= 2;
-  } else {
-    const rank1 = combo[0];
-    const rank2 = combo[1];
-    const suited = combo[2] === 's';
-    if (suited) {
-      return SUITS.some(suit =>
-        deck.some(c => c.rank === rank1 && c.suit === suit) &&
-        deck.some(c => c.rank === rank2 && c.suit === suit)
-      );
-    } else {
-      return SUITS.some(suit1 =>
-        SUITS.some(suit2 =>
-          suit1 !== suit2 &&
-          deck.some(c => c.rank === rank1 && c.suit === suit1) &&
-          deck.some(c => c.rank === rank2 && c.suit === suit2)
-        )
-      );
+// 将 legacy combo 名 (如 "AKs") 展开为 WeightedCombo[]
+function expandLegacyCombo(comboName) {
+  const combos = [];
+  if (comboName.length === 2 && comboName[0] === comboName[1]) {
+    const r = 12 - RANK_ORDER.indexOf(comboName[0]);
+    for (let s1 = 0; s1 < 4; s1++) {
+      for (let s2 = s1 + 1; s2 < 4; s2++) {
+        combos.push({ card1: makeCard(r, s1), card2: makeCard(r, s2), combo: comboName, weight: 100 });
+      }
+    }
+  } else if (comboName[2] === 's') {
+    const r1 = 12 - RANK_ORDER.indexOf(comboName[0]);
+    const r2 = 12 - RANK_ORDER.indexOf(comboName[1]);
+    for (let s = 0; s < 4; s++) {
+      combos.push({ card1: makeCard(r1, s), card2: makeCard(r2, s), combo: comboName, weight: 100 });
+    }
+  } else if (comboName[2] === 'o') {
+    const r1 = 12 - RANK_ORDER.indexOf(comboName[0]);
+    const r2 = 12 - RANK_ORDER.indexOf(comboName[1]);
+    for (let s1 = 0; s1 < 4; s1++) {
+      for (let s2 = 0; s2 < 4; s2++) {
+        if (s1 !== s2) combos.push({ card1: makeCard(r1, s1), card2: makeCard(r2, s2), combo: comboName, weight: 100 });
+      }
     }
   }
+  return combos;
 }
 
-function getAvailableCombos(range, deck) {
-  return range.filter(combo => isComboAvailable(combo, deck));
+function expandLegacyRange(rangeNames) {
+  const all = [];
+  for (const name of rangeNames) all.push(...expandLegacyCombo(name));
+  return all;
 }
 
-// 随机采样：将 combo 解析为具体牌（随机选一个可用的花色组合）
-function comboToCardsRandom(combo, deck) {
-  const candidates = [];
+// ============================================
+// 4. 主模拟函数
+// ============================================
 
-  if (combo.length === 2 && combo[0] === combo[1]) {
-    // 对子：枚举所有可用的花色对
-    const rank = combo[0];
-    const available = deck.filter(c => c.rank === rank);
-    for (let i = 0; i < available.length; i++) {
-      for (let j = i + 1; j < available.length; j++) {
-        candidates.push([available[i], available[j]]);
-      }
+// ============================================
+// 精确枚举 (River / Turn)
+// ============================================
+
+function deckToArray(deck) {
+  const result = [];
+  let bits = deck[0];
+  while (bits) { const lsb = bits & (-bits); result.push(Math.clz32(lsb) ^ 31); bits ^= lsb; }
+  bits = deck[1];
+  while (bits) { const lsb = bits & (-bits); result.push((Math.clz32(lsb) ^ 31) + 32); bits ^= lsb; }
+  return result;
+}
+
+function exactRiver(heroCards, boardCards, oppCombos) {
+  const dead = fullDeck();
+  for (const c of boardCards) removeCardFromDeck(dead, c);
+  removeCardFromDeck(dead, heroCards[0]);
+  removeCardFromDeck(dead, heroCards[1]);
+
+  const heroValue = evaluate7([heroCards[0], heroCards[1], ...boardCards]);
+  let wins = 0, ties = 0, losses = 0;
+
+  if (oppCombos) {
+    for (const vc of oppCombos) {
+      if (!hasCard(dead, vc.card1) || !hasCard(dead, vc.card2)) continue;
+      const vv = evaluate7([vc.card1, vc.card2, ...boardCards]);
+      if (heroValue > vv) wins++; else if (heroValue === vv) ties++; else losses++;
     }
   } else {
-    const rank1 = combo[0];
-    const rank2 = combo[1];
-    const suited = combo[2] === 's';
-    if (suited) {
-      for (const suit of SUITS) {
-        const card1 = deck.find(c => c.rank === rank1 && c.suit === suit);
-        const card2 = deck.find(c => c.rank === rank2 && c.suit === suit);
-        if (card1 && card2) candidates.push([card1, card2]);
+    const avail = deckToArray(dead);
+    for (let i = 0; i < avail.length; i++) {
+      for (let j = i + 1; j < avail.length; j++) {
+        const vv = evaluate7([avail[i], avail[j], ...boardCards]);
+        if (heroValue > vv) wins++; else if (heroValue === vv) ties++; else losses++;
+      }
+    }
+  }
+  return { wins, ties, losses, total: wins + ties + losses };
+}
+
+function exactTurn(heroCards, boardCards, oppCombos) {
+  const baseDead = fullDeck();
+  for (const c of boardCards) removeCardFromDeck(baseDead, c);
+  removeCardFromDeck(baseDead, heroCards[0]);
+  removeCardFromDeck(baseDead, heroCards[1]);
+
+  const remaining = deckToArray(baseDead);
+  let wins = 0, ties = 0, losses = 0;
+
+  for (const river of remaining) {
+    const board5 = [...boardCards, river];
+    const heroValue = evaluate7([heroCards[0], heroCards[1], ...board5]);
+
+    if (oppCombos) {
+      for (const vc of oppCombos) {
+        if (vc.card1 === river || vc.card2 === river) continue;
+        if (!hasCard(baseDead, vc.card1) || !hasCard(baseDead, vc.card2)) continue;
+        const vv = evaluate7([vc.card1, vc.card2, ...board5]);
+        if (heroValue > vv) wins++; else if (heroValue === vv) ties++; else losses++;
       }
     } else {
-      for (const suit1 of SUITS) {
-        for (const suit2 of SUITS) {
-          if (suit1 !== suit2) {
-            const card1 = deck.find(c => c.rank === rank1 && c.suit === suit1);
-            const card2 = deck.find(c => c.rank === rank2 && c.suit === suit2);
-            if (card1 && card2) candidates.push([card1, card2]);
-          }
+      for (let i = 0; i < remaining.length; i++) {
+        if (remaining[i] === river) continue;
+        for (let j = i + 1; j < remaining.length; j++) {
+          if (remaining[j] === river) continue;
+          const vv = evaluate7([remaining[i], remaining[j], ...board5]);
+          if (heroValue > vv) wins++; else if (heroValue === vv) ties++; else losses++;
         }
       }
     }
   }
-
-  if (candidates.length === 0) return [];
-  return candidates[Math.floor(Math.random() * candidates.length)];
+  return { wins, ties, losses, total: wins + ties + losses };
 }
 
 // ============================================
-// 精确计算 Outs（遍历完整牌堆 + 死锁熔断）
-// ============================================
-
-function calculatePreciseOuts(playerHand, communityCards, opponentType, opponentCount) {
-  if (communityCards.length >= 5) return 0;
-
-  const deck = createDeck();
-  const remainingDeck = removeCards(deck, [...playerHand, ...communityCards]);
-
-  let currentWins = 0;
-  let currentSamples = 0;
-  const sampleCount = 200;
-
-  for (let i = 0; i < sampleCount; i++) {
-    let simDeck = shuffleDeck(remainingDeck);
-    const opponentHands = [];
-    for (let j = 0; j < opponentCount; j++) {
-      opponentHands.push([simDeck[0], simDeck[1]]);
-      simDeck = removeCards(simDeck, [simDeck[0], simDeck[1]]);
-    }
-    const remainingCommunity = 5 - communityCards.length;
-    const runOut = simDeck.slice(0, remainingCommunity);
-    const finalCommunity = [...communityCards, ...runOut];
-    const playerResult = evaluateHand(playerHand, finalCommunity);
-    const opponentResults = opponentHands.map(h => evaluateHand(h, finalCommunity));
-    const bestOpponent = Math.max(...opponentResults.map(r => r.value));
-    if (playerResult.value > bestOpponent) currentWins++;
-    else if (playerResult.value === bestOpponent) currentWins += 0.5;
-    currentSamples++;
-  }
-
-  const currentWinRate = currentSamples > 0 ? currentWins / currentSamples : 0;
-  if (currentWinRate > 0.55) return 0;
-
-  let outs = 0;
-  const opponentRange = OPPONENT_RANGES[opponentType];
-  const useRange = opponentType !== 'random' && opponentRange.length > 0;
-
-  for (const candidateCard of remainingDeck) {
-    const newCommunity = [...communityCards, candidateCard];
-    let winsWithThisCard = 0;
-    let samplesWithThisCard = 0;
-    const cardSampleCount = 50;
-    let outsDeadlockCounter = 0;
-
-    for (let i = 0; i < cardSampleCount; i++) {
-      let simDeck = removeCards(remainingDeck, [candidateCard]);
-      simDeck = shuffleDeck(simDeck);
-      const opponentHands = [];
-      let validOpponents = true;
-
-      for (let j = 0; j < opponentCount; j++) {
-        let oppCards;
-        if (useRange) {
-          const availableCombos = getAvailableCombos(opponentRange, simDeck);
-          if (availableCombos.length === 0) { validOpponents = false; break; }
-          const randomCombo = availableCombos[Math.floor(Math.random() * availableCombos.length)];
-          oppCards = comboToCardsRandom(randomCombo, simDeck);
-        } else {
-          oppCards = [simDeck[0], simDeck[1]];
-        }
-        if (!oppCards || oppCards.length !== 2) { validOpponents = false; break; }
-        opponentHands.push(oppCards);
-        simDeck = removeCards(simDeck, oppCards);
-      }
-
-      // 死锁熔断
-      if (!validOpponents) {
-        outsDeadlockCounter++;
-        if (outsDeadlockCounter > 20) break;
-        i--;
-        continue;
-      }
-      outsDeadlockCounter = 0;
-
-      const remainingCommunity = 5 - newCommunity.length;
-      const runOut = simDeck.slice(0, remainingCommunity);
-      const finalCommunity = [...newCommunity, ...runOut];
-      const playerResult = evaluateHand(playerHand, finalCommunity);
-      const opponentResults = opponentHands.map(h => evaluateHand(h, finalCommunity));
-      const bestOpponent = Math.max(...opponentResults.map(r => r.value));
-      if (playerResult.value > bestOpponent) winsWithThisCard++;
-      else if (playerResult.value === bestOpponent) winsWithThisCard += 0.5;
-      samplesWithThisCard++;
-    }
-
-    const winRateWithThisCard = samplesWithThisCard > 0 ? winsWithThisCard / samplesWithThisCard : 0;
-    if (winRateWithThisCard - currentWinRate > 0.05) outs++;
-  }
-
-  return outs;
-}
-
-// ============================================
-// 主模拟函数（支持 Range vs Range）
+// 4. 主模拟函数 (混合策略)
 // ============================================
 
 self.onmessage = function (event) {
-  const message = event.data;
+  const msg = event.data;
+  if (msg.type !== 'simulate') return;
 
-  if (message.type === 'simulate') {
-    const { playerHand, playerRange, communityCards, opponentType, opponentCount, simulations } = message;
+  const startTime = performance.now();
+  const { playerHand, playerRange, communityCards, opponentType, opponentCount, simulations } = msg;
 
-    // 判断模式：固定手牌 vs Range
-    const isRangeMode = playerRange && playerRange.length > 0;
+  // --- 准备阶段 ---
+  const boardCards = (communityCards || []).map(c => parseCardObj(c));
+  const isRangeMode = playerRange && playerRange.length > 0;
 
-    let wins = 0;
-    let ties = 0;
-    let losses = 0;
+  let playerCombos = null;
+  let fixedPlayerCards = null;
+  if (isRangeMode) {
+    playerCombos = expandLegacyRange(playerRange);
+  } else if (playerHand && playerHand.length === 2) {
+    fixedPlayerCards = [parseCardObj(playerHand[0]), parseCardObj(playerHand[1])];
+  }
 
-    const opponentRange = OPPONENT_RANGES[opponentType];
-    const useOppRange = opponentType !== 'random' && opponentRange.length > 0;
+  // 构建 opponent combos
+  const oppRangeNames = OPPONENT_RANGES[opponentType] || [];
+  const useOppRange = opponentType !== 'random' && oppRangeNames.length > 0;
+  const oppCombos = useOppRange ? expandLegacyRange(oppRangeNames) : null;
 
-    const progressInterval = Math.max(1000, Math.floor(simulations / 20));
-    let lastProgressReport = 0;
+  // 结果追踪
+  let wins = 0, ties = 0, losses = 0;
+  const equityByCombo = {};
+  if (isRangeMode) {
+    for (const name of playerRange) {
+      equityByCombo[name] = { wins: 0, total: 0 };
+    }
+  }
 
-    // 当前牌力（仅固定手牌模式下有意义）
-    let currentHandRank = null;
-    if (!isRangeMode && communityCards.length >= 3 && playerHand && playerHand.length === 2) {
-      const result = evaluateHand(playerHand, communityCards);
-      currentHandRank = result.rank;
+  // ====== 混合策略: 精确枚举 vs MC ======
+  let strategy = 'monte-carlo';
+
+  if (!isRangeMode && fixedPlayerCards && (opponentCount || 1) === 1) {
+    if (boardCards.length === 5) {
+      // River: 精确枚举
+      strategy = 'exact-river';
+      const result = exactRiver(fixedPlayerCards, boardCards, oppCombos);
+      const total = result.total;
+      const runtimeMs = Math.round((performance.now() - startTime) * 100) / 100;
+
+      let currentHandRank = null;
+      const hv = evaluate7([fixedPlayerCards[0], fixedPlayerCards[1], ...boardCards]);
+      currentHandRank = HAND_RANK_NAMES[Math.floor(hv / 1000000)] || null;
+
+      self.postMessage({
+        type: 'complete',
+        win: total > 0 ? (result.wins / total) * 100 : 0,
+        tie: total > 0 ? (result.ties / total) * 100 : 0,
+        lose: total > 0 ? (result.losses / total) * 100 : 0,
+        simulations: total,
+        confidence: 100,
+        handRank: currentHandRank,
+        outs: null,
+        equityByCombo: null,
+        strategy: strategy,
+        runtimeMs: runtimeMs
+      });
+      return;
     }
 
-    // Per-combo equity tracking (RvR mode)
-    const equityByCombo = {};
+    if (boardCards.length === 4) {
+      // Turn: 精确枚举
+      strategy = 'exact-turn';
+      const result = exactTurn(fixedPlayerCards, boardCards, oppCombos);
+      const total = result.total;
+      const runtimeMs = Math.round((performance.now() - startTime) * 100) / 100;
+
+      let currentHandRank = null;
+      const partialCards = [fixedPlayerCards[0], fixedPlayerCards[1], ...boardCards];
+      if (partialCards.length >= 6) {
+        const hv = evaluate7(partialCards.concat(new Array(7 - partialCards.length).fill(0)));
+        currentHandRank = HAND_RANK_NAMES[Math.floor(hv / 1000000)] || null;
+      }
+
+      self.postMessage({
+        type: 'complete',
+        win: total > 0 ? (result.wins / total) * 100 : 0,
+        tie: total > 0 ? (result.ties / total) * 100 : 0,
+        lose: total > 0 ? (result.losses / total) * 100 : 0,
+        simulations: total,
+        confidence: 100,
+        handRank: currentHandRank,
+        outs: null,
+        equityByCombo: null,
+        strategy: strategy,
+        runtimeMs: runtimeMs
+      });
+      return;
+    }
+  }
+
+  // ====== Monte Carlo 路径 ======
+  const progressInterval = Math.max(1000, Math.floor(simulations / 20));
+  let lastProgress = 0;
+  let deadlockCounter = 0;
+
+  let currentHandRank = null;
+  if (!isRangeMode && fixedPlayerCards && boardCards.length >= 3) {
+    const allCards = [...fixedPlayerCards, ...boardCards];
+    const val = evaluate7(allCards.length >= 7 ? allCards : allCards.concat(new Array(7 - allCards.length).fill(0)));
+    currentHandRank = HAND_RANK_NAMES[Math.floor(val / 1000000)] || null;
+  }
+
+  // --- 主循环 ---
+  for (let i = 0; i < simulations; i++) {
+    // 初始化 deck (bitmask)
+    const deck = fullDeck();
+    for (const c of boardCards) removeCardFromDeck(deck, c);
+
+    // Step A: 玩家手牌
+    let heroCards;
+    let heroCombo = null;
+
     if (isRangeMode) {
-      for (const combo of playerRange) {
-        equityByCombo[combo] = { wins: 0, total: 0 };
-      }
-    }
-
-    // ============================================
-    // 【防卡顿核心】主循环死锁熔断机制
-    // ============================================
-    let deadlockCounter = 0;
-
-    for (let i = 0; i < simulations; i++) {
-      let deck = createDeck();
-      deck = shuffleDeck(deck);
-      deck = removeCards(deck, communityCards);
-
-      // === Step A: 确定玩家手牌 ===
-      let currentPlayerHand;
-      let currentPlayerCombo = null;
-
-      if (isRangeMode) {
-        // Range 模式：从 playerRange 中采样
-        const availablePlayerCombos = getAvailableCombos(playerRange, deck);
-        if (availablePlayerCombos.length === 0) {
-          deadlockCounter++;
-          if (deadlockCounter > 50) {
-            // 强制随机降级
-            currentPlayerHand = [deck[0], deck[1]];
-          } else {
-            i--;
-            continue;
-          }
-        } else {
-          deadlockCounter = 0;
-          currentPlayerCombo = availablePlayerCombos[Math.floor(Math.random() * availablePlayerCombos.length)];
-          currentPlayerHand = comboToCardsRandom(currentPlayerCombo, deck);
-          if (!currentPlayerHand || currentPlayerHand.length !== 2) {
-            i--;
-            continue;
-          }
-        }
-      } else {
-        // 固定手牌模式
-        currentPlayerHand = playerHand;
-      }
-
-      // 从牌组中移除玩家手牌
-      deck = removeCards(deck, currentPlayerHand);
-
-      // === Step B: 为对手发牌 ===
-      const opponentHands = [];
-      let validOpponents = true;
-      let oppDeadlockCounter = 0;
-
-      for (let j = 0; j < opponentCount; j++) {
-        let oppCards = null;
-
-        if (useOppRange) {
-          const availableCombos = getAvailableCombos(opponentRange, deck);
-          if (availableCombos.length === 0) {
-            validOpponents = false;
-            break;
-          }
-          const randomCombo = availableCombos[Math.floor(Math.random() * availableCombos.length)];
-          oppCards = comboToCardsRandom(randomCombo, deck);
-        } else {
-          if (deck.length >= 2) {
-            oppCards = [deck[0], deck[1]];
-          }
-        }
-
-        if (!oppCards || oppCards.length !== 2) {
-          validOpponents = false;
-          break;
-        }
-
-        opponentHands.push(oppCards);
-        deck = removeCards(deck, oppCards);
-      }
-
-      // ============================================
-      // 死锁熔断机制（对手）
-      // ============================================
-      if (!validOpponents) {
+      const sampled = sampleComboFromList(playerCombos, deck);
+      if (!sampled) {
         deadlockCounter++;
         if (deadlockCounter > 50) {
-          opponentHands.length = 0;
-          let fallbackDeck = shuffleDeck(removeCards(createDeck(), [...currentPlayerHand, ...communityCards]));
-          for (let k = 0; k < opponentCount; k++) {
-            if (fallbackDeck.length >= 2) {
-              opponentHands.push([fallbackDeck[0], fallbackDeck[1]]);
-              fallbackDeck = removeCards(fallbackDeck, [fallbackDeck[0], fallbackDeck[1]]);
-            }
-          }
-          validOpponents = true;
+          // 强制随机
+          const tmp = cloneDeck(deck);
+          heroCards = drawN(tmp, 2);
+          deck[0] = tmp[0]; deck[1] = tmp[1];
         } else {
-          i--;
-          continue;
-        }
-      }
-      deadlockCounter = 0;
-
-      // === Step C: 发公共牌并评估 ===
-      const remainingCommunity = 5 - communityCards.length;
-      const runOut = deck.slice(0, remainingCommunity);
-      const finalCommunity = [...communityCards, ...runOut];
-
-      const playerResult = evaluateHand(currentPlayerHand, finalCommunity);
-      const opponentResults = opponentHands.map(h => evaluateHand(h, finalCommunity));
-      const bestOpponent = Math.max(...opponentResults.map(r => r.value));
-
-      if (playerResult.value > bestOpponent) {
-        wins++;
-        if (currentPlayerCombo && equityByCombo[currentPlayerCombo]) {
-          equityByCombo[currentPlayerCombo].wins++;
-        }
-      } else if (playerResult.value === bestOpponent) {
-        ties++;
-        // 平局算 0.5 胜
-        if (currentPlayerCombo && equityByCombo[currentPlayerCombo]) {
-          equityByCombo[currentPlayerCombo].wins += 0.5;
+          i--; continue;
         }
       } else {
-        losses++;
+        deadlockCounter = 0;
+        heroCards = [sampled.card1, sampled.card2];
+        heroCombo = sampled.combo;
+        removeCardFromDeck(deck, sampled.card1);
+        removeCardFromDeck(deck, sampled.card2);
       }
+    } else {
+      heroCards = fixedPlayerCards;
+      removeCardFromDeck(deck, heroCards[0]);
+      removeCardFromDeck(deck, heroCards[1]);
+    }
 
-      if (currentPlayerCombo && equityByCombo[currentPlayerCombo]) {
-        equityByCombo[currentPlayerCombo].total++;
-      }
+    // Step B: 对手手牌
+    const villainHands = [];
+    let valid = true;
 
-      // 进度报告
-      if (i - lastProgressReport >= progressInterval) {
-        lastProgressReport = i;
-        const progress = ((i + 1) / simulations) * 100;
-        self.postMessage({
-          type: 'progress',
-          progress: Math.round(progress * 10) / 10,
-          currentWins: wins,
-          currentTies: ties,
-          currentLosses: losses,
-          currentSimulations: i + 1
-        });
+    for (let j = 0; j < opponentCount; j++) {
+      if (oppCombos) {
+        const sampled = sampleComboFromList(oppCombos, deck);
+        if (!sampled) { valid = false; break; }
+        villainHands.push([sampled.card1, sampled.card2]);
+        removeCardFromDeck(deck, sampled.card1);
+        removeCardFromDeck(deck, sampled.card2);
+      } else {
+        const drawn = drawN(deck, 2);
+        if (drawn.length < 2) { valid = false; break; }
+        villainHands.push(drawn);
       }
     }
 
-    // 计算置信度
-    const totalSimulations = wins + ties + losses;
-    const winRate = totalSimulations > 0 ? wins / totalSimulations : 0;
-    const confidence = 1.96 * Math.sqrt((winRate * (1 - winRate)) / Math.max(1, totalSimulations)) * 100;
-
-    // 计算精确 Outs（仅固定手牌模式）
-    let preciseOuts = null;
-    if (!isRangeMode && playerHand && playerHand.length === 2 && communityCards.length >= 3 && communityCards.length < 5) {
-      preciseOuts = calculatePreciseOuts(playerHand, communityCards, opponentType, opponentCount);
-    }
-
-    // 计算每个 combo 的 equity
-    const comboEquities = {};
-    if (isRangeMode) {
-      for (const [combo, data] of Object.entries(equityByCombo)) {
-        comboEquities[combo] = {
-          wins: data.wins,
-          total: data.total,
-          equity: data.total > 0 ? (data.wins / data.total) * 100 : 0
-        };
+    if (!valid) {
+      deadlockCounter++;
+      if (deadlockCounter > 50) {
+        // Fallback: 随机发牌
+        const fb = fullDeck();
+        for (const c of boardCards) removeCardFromDeck(fb, c);
+        removeCardFromDeck(fb, heroCards[0]);
+        removeCardFromDeck(fb, heroCards[1]);
+        villainHands.length = 0;
+        for (let k = 0; k < opponentCount; k++) {
+          const drawn = drawN(fb, 2);
+          if (drawn.length >= 2) villainHands.push(drawn);
+        }
+        valid = true;
+      } else {
+        i--; continue;
       }
     }
+    deadlockCounter = 0;
 
-    // 返回最终结果
-    self.postMessage({
-      type: 'complete',
-      win: totalSimulations > 0 ? (wins / totalSimulations) * 100 : 0,
-      tie: totalSimulations > 0 ? (ties / totalSimulations) * 100 : 0,
-      lose: totalSimulations > 0 ? (losses / totalSimulations) * 100 : 0,
-      simulations: totalSimulations,
-      confidence: Math.round((1 - confidence / 100) * 1000) / 10,
-      handRank: currentHandRank,
-      outs: preciseOuts,
-      equityByCombo: isRangeMode ? comboEquities : null
-    });
+    // Step C: 公共牌补全
+    const remainingBoard = 5 - boardCards.length;
+    const runout = drawN(deck, remainingBoard);
+    const fullBoard = boardCards.concat(runout);
+
+    // Step D: 评估
+    const heroValue = evaluate7(heroCards.concat(fullBoard));
+    let bestVillain = -1;
+    for (const vh of villainHands) {
+      const v = evaluate7(vh.concat(fullBoard));
+      if (v > bestVillain) bestVillain = v;
+    }
+
+    if (heroValue > bestVillain) {
+      wins++;
+      if (heroCombo && equityByCombo[heroCombo]) equityByCombo[heroCombo].wins++;
+    } else if (heroValue === bestVillain) {
+      ties++;
+      if (heroCombo && equityByCombo[heroCombo]) equityByCombo[heroCombo].wins += 0.5;
+    } else {
+      losses++;
+    }
+
+    if (heroCombo && equityByCombo[heroCombo]) equityByCombo[heroCombo].total++;
+
+    // 进度
+    if (i - lastProgress >= progressInterval) {
+      lastProgress = i;
+      self.postMessage({
+        type: 'progress',
+        progress: Math.round(((i + 1) / simulations) * 1000) / 10,
+        currentWins: wins,
+        currentTies: ties,
+        currentLosses: losses,
+        currentSimulations: i + 1
+      });
+    }
   }
+
+  // --- 结果 ---
+  const total = wins + ties + losses;
+  const winRate = total > 0 ? wins / total : 0;
+  const confidence = 1.96 * Math.sqrt((winRate * (1 - winRate)) / Math.max(1, total)) * 100;
+
+  const comboEquities = {};
+  if (isRangeMode) {
+    for (const [combo, data] of Object.entries(equityByCombo)) {
+      comboEquities[combo] = {
+        wins: data.wins,
+        total: data.total,
+        equity: data.total > 0 ? (data.wins / data.total) * 100 : 0
+      };
+    }
+  }
+
+  const runtimeMs = Math.round((performance.now() - startTime) * 100) / 100;
+
+  self.postMessage({
+    type: 'complete',
+    win: total > 0 ? (wins / total) * 100 : 0,
+    tie: total > 0 ? (ties / total) * 100 : 0,
+    lose: total > 0 ? (losses / total) * 100 : 0,
+    simulations: total,
+    confidence: Math.round((1 - confidence / 100) * 1000) / 10,
+    handRank: currentHandRank,
+    outs: null,
+    equityByCombo: isRangeMode ? comboEquities : null,
+    strategy: strategy,
+    runtimeMs: runtimeMs
+  });
 };

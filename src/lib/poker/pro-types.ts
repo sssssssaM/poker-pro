@@ -201,6 +201,126 @@ export const DEFAULT_OPEN_RANGES: Record<OpponentType, string[]> = {
   custom: []
 };
 
+// ============================================
+// Phase 2 — 专业分析类型
+// ============================================
+
+import type { CardIndex } from './card';
+
+// 听牌类型
+export type DrawType =
+  | 'flush-draw'         // 同花听牌 (差1张)
+  | 'oesd'               // 两头顺子听牌
+  | 'gutshot'            // 卡顺听牌
+  | 'overcards'          // 超对牌
+  | 'pair-to-trips'      // 对子→三条
+  | 'pair-to-two-pair'   // 高牌→一对
+  | 'trips-to-full'      // 三条→葫芦
+  | 'two-pair-to-full'   // 两对→葫芦
+  | 'set-to-quads'       // 暗三→四条
+  | 'backdoor-flush'     // 后门同花 (差2张)
+  | 'backdoor-straight'  // 后门顺子
+  | 'runner-runner';     // 其他双跑牌
+
+// 单张 out 信息
+export interface OutInfo {
+  card: CardIndex;          // 具体的牌 (0-51)
+  drawType: DrawType;       // 听牌类型
+  improvesTo: string;       // 改进到的牌型名称
+}
+
+// 听牌类型统计
+export interface DrawBreakdown {
+  type: DrawType;
+  label: string;            // 中文标签
+  count: number;            // 该类型的 outs 数量
+  cards: CardIndex[];       // 具体的牌
+}
+
+// Outs 检测结果
+export interface OutsResult {
+  totalOuts: number;        // 总 outs 数
+  outs: OutInfo[];          // 详细 out 列表
+  drawTypes: DrawBreakdown[]; // 按类型分组
+}
+
+// 坚果牌检测结果
+export interface NutResult {
+  currentNuts: string;      // 当前坚果牌描述
+  heroIsNuts: boolean;      // hero 是否持有坚果
+  nutRank: number;          // hero 手牌在所有可能手牌中的排名 (1=最强)
+  totalPossible: number;    // 可能的总手牌数
+}
+
+// 坚果潜力结果
+export interface NutPotentialResult {
+  nutFraction: number;      // 下一张牌 hero 成为坚果的概率 (0-1)
+  nutCards: CardIndex[];    // 哪些牌让 hero 成为坚果
+  totalRemaining: number;   // 剩余牌总数
+}
+
+// 单街 Equity
+export interface StreetEquity {
+  equity: number;           // 0-100%
+  win: number;              // 胜率%
+  tie: number;              // 平局%
+}
+
+// 街道 Equity 变化结果
+export interface StreetEquityResult {
+  flop?: StreetEquity;
+  turn?: StreetEquity;
+  river?: StreetEquity;
+}
+
+// Blocker 信息
+export interface BlockerComboInfo {
+  combo: string;            // 抽象 combo 名称
+  totalCombos: number;      // 无阻挡时的总组合数
+  blockedCombos: number;    // 被 hero 阻挡的组合数
+  remainingCombos: number;  // 剩余可用组合数
+  blockPercent: number;     // 阻挡百分比 (0-100)
+}
+
+// Blocker 分析结果
+export interface BlockerResult {
+  blockerDetails: BlockerComboInfo[]; // 每个 combo 的阻挡详情
+  totalRangeCombos: number;           // 对手 range 总组合数
+  totalBlocked: number;               // 被阻挡的总数
+  totalRemaining: number;             // 剩余总数
+  overallBlockPercent: number;        // 整体阻挡百分比
+}
+
+// 底池赔率结果
+export interface PotOddsResult {
+  potOdds: number;          // 底池赔率百分比
+  potOddsRatio: string;     // 底池赔率比例 "3:1"
+  breakEvenEquity: number;  // 盈亏平衡胜率%
+  isCallProfitable: boolean; // 跟注是否有利 (需传入 equity)
+}
+
+// 高级 EV 结果 (含 fold equity)
+export interface EVAdvancedResult {
+  foldEV: number;           // fold equity 贡献的 EV
+  callEV: number;           // 被跟注时的 EV
+  totalEV: number;          // 总 EV = foldEV + callEV
+  minFoldEquity: number;    // 使 raise +EV 所需最低弃牌率
+  potOdds: number;          // 底池赔率%
+  breakEven: number;        // 盈亏平衡胜率%
+  isPositiveEV: boolean;    // 是否 +EV
+  recommendation: string;   // 行动建议 (中文)
+  formula: string;          // 公式展示
+}
+
+// 半诈唬 EV 结果
+export interface SemiBluffEVResult {
+  totalEV: number;
+  foldEV: number;
+  callEquityEV: number;     // 被跟注后靠 equity 赢得的 EV
+  improvementEV: number;    // 靠 outs 改进赢得的 EV
+  recommendation: string;
+}
+
 // 获取矩阵中的组合名称
 export function getComboName(row: number, col: number): HandCombo {
   const ranks = RANKS;

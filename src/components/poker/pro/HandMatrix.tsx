@@ -1,13 +1,9 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { LayoutGrid, Plus, X, Type, Zap } from 'lucide-react';
 import { Card, Rank, Suit, HandCombo, RANKS, SUITS, SUIT_SYMBOLS, getComboName, TOP_RANGE_PRESETS } from '@/lib/poker/pro-types';
 import { parseRangeString, comboSetToString, countCombos, comboSpecificCount } from '@/lib/poker/range-parser';
-
-// ============================================
-// Range 选择器（矩阵多选模式）
-// ============================================
 
 interface RangeMatrixProps {
   onRangeChange: (selectedCombos: Set<HandCombo>, rangeString: string) => void;
@@ -20,32 +16,12 @@ export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [] }
   const [rangeText, setRangeText] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [dragMode, setDragMode] = useState<'add' | 'remove'>('add');
+  const matrixRef = useRef<HTMLDivElement>(null);
 
-  // 统计信息
-  const stats = useMemo(() => {
-    return countCombos(selectedRange, disabledCards);
-  }, [selectedRange, disabledCards]);
-
-  // 同步文本框（当选中变化时）
+  const stats = useMemo(() => countCombos(selectedRange, disabledCards), [selectedRange, disabledCards]);
   const rangeString = useMemo(() => comboSetToString(selectedRange), [selectedRange]);
 
-  // 处理矩阵 cell 点击：toggle combo
-  const handleCellClick = useCallback((row: number, col: number) => {
-    const combo = getComboName(row, col);
-    const newRange = new Set(selectedRange);
-
-    if (newRange.has(combo)) {
-      newRange.delete(combo);
-    } else {
-      newRange.add(combo);
-    }
-
-    const str = comboSetToString(newRange);
-    setRangeText(str);
-    onRangeChange(newRange, str);
-  }, [selectedRange, onRangeChange]);
-
-  // 拖拽选择
+  // 电脑端：处理点击和鼠标拖拽
   const handleCellMouseDown = useCallback((row: number, col: number) => {
     const combo = getComboName(row, col);
     const mode = selectedRange.has(combo) ? 'remove' : 'add';
@@ -77,38 +53,79 @@ export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [] }
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
+    setHoveredCell(null);
   }, []);
 
-  // 快捷预设按钮
+  // 📱 移动端：处理手指滑动涂抹 (Touch Events)
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (!isDragging) return;
+
+    // 阻止页面滚动，让手指专心滑动选牌
+    if (e.cancelable) e.preventDefault();
+
+    const touch = e.touches[0];
+    const element = document.elementFromPoint(touch.clientX, touch.clientY) as HTMLElement;
+
+    if (element && element.dataset.combo) {
+      const combo = element.dataset.combo;
+      const row = parseInt(element.dataset.row!);
+      const col = parseInt(element.dataset.col!);
+
+      // 防止在同一个格子上重复触发
+      if (hoveredCell?.row === row && hoveredCell?.col === col) return;
+
+      setHoveredCell({ row, col });
+      const newRange = new Set(selectedRange);
+      if (dragMode === 'add') newRange.add(combo);
+      else newRange.delete(combo);
+
+      const str = comboSetToString(newRange);
+      setRangeText(str);
+      onRangeChange(newRange, str);
+    }
+  }, [isDragging, dragMode, selectedRange, hoveredCell, onRangeChange]);
+
+  const handleTouchStart = useCallback((row: number, col: number) => {
+    handleCellMouseDown(row, col);
+  }, [handleCellMouseDown]);
+
+  const handleTouchEnd = useCallback(() => {
+    handleMouseUp();
+  }, [handleMouseUp]);
+
+  // 全局防止鼠标/手指松开时状态未重置
+  useEffect(() => {
+    document.addEventListener('mouseup', handleMouseUp);
+    document.addEventListener('touchend', handleMouseUp);
+    return () => {
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('touchend', handleMouseUp);
+    };
+  }, [handleMouseUp]);
+
+  // 快捷操作
   const handlePreset = useCallback((presetKey: string) => {
     const preset = TOP_RANGE_PRESETS[presetKey];
     if (!preset) return;
     const newRange = new Set<HandCombo>(preset.combos);
-    const str = comboSetToString(newRange);
-    setRangeText(str);
-    onRangeChange(newRange, str);
+    setRangeText(comboSetToString(newRange));
+    onRangeChange(newRange, comboSetToString(newRange));
   }, [onRangeChange]);
 
-  // 全选 / 清空
   const handleSelectAll = useCallback(() => {
     const newRange = new Set<HandCombo>();
     for (let r = 0; r < 13; r++) {
-      for (let c = 0; c < 13; c++) {
-        newRange.add(getComboName(r, c));
-      }
+      for (let c = 0; c < 13; c++) newRange.add(getComboName(r, c));
     }
-    const str = comboSetToString(newRange);
-    setRangeText(str);
-    onRangeChange(newRange, str);
+    setRangeText(comboSetToString(newRange));
+    onRangeChange(newRange, comboSetToString(newRange));
   }, [onRangeChange]);
 
   const handleClear = useCallback(() => {
-    const newRange = new Set<HandCombo>();
     setRangeText('');
-    onRangeChange(newRange, '');
+    onRangeChange(new Set(), '');
   }, [onRangeChange]);
 
-  // 文本框提交
   const handleTextSubmit = useCallback(() => {
     const parsed = parseRangeString(rangeText);
     const str = comboSetToString(parsed);
@@ -116,133 +133,66 @@ export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [] }
     onRangeChange(parsed, str);
   }, [rangeText, onRangeChange]);
 
-  // 获取 cell 样式
   const getCellStyle = (row: number, col: number) => {
     const combo = getComboName(row, col);
     const isSelected = selectedRange.has(combo);
     const isHovered = hoveredCell?.row === row && hoveredCell?.col === col;
-    const isPair = row === col;
-    const isSuited = row < col;
 
-    if (isSelected) {
-      return {
-        bg: 'bg-gradient-to-br from-emerald-500/80 to-teal-600/80',
-        text: 'text-white',
-        border: 'border-emerald-400/60'
-      };
-    }
-
-    if (isHovered) {
-      return {
-        bg: 'bg-gray-600',
-        text: 'text-white',
-        border: 'border-gray-500'
-      };
-    }
-
-    if (isPair) {
-      return {
-        bg: 'bg-gradient-to-br from-amber-500/20 to-orange-500/20',
-        text: 'text-amber-300',
-        border: 'border-gray-600'
-      };
-    }
-
-    if (isSuited) {
-      return {
-        bg: 'bg-gradient-to-br from-cyan-500/20 to-blue-500/20',
-        text: 'text-cyan-300',
-        border: 'border-gray-600'
-      };
-    }
-
-    return {
-      bg: 'bg-gradient-to-br from-gray-600 to-gray-700',
-      text: 'text-gray-300',
-      border: 'border-gray-600'
-    };
+    if (isSelected) return 'bg-gradient-to-br from-emerald-500/80 to-teal-600/80 text-white border-emerald-400/60';
+    if (isHovered) return 'bg-gray-600 text-white border-gray-500';
+    if (row === col) return 'bg-gradient-to-br from-amber-500/20 to-orange-500/20 text-amber-300 border-gray-600';
+    if (row < col) return 'bg-gradient-to-br from-cyan-500/20 to-blue-500/20 text-cyan-300 border-gray-600';
+    return 'bg-gradient-to-br from-gray-600 to-gray-700 text-gray-300 border-gray-600';
   };
 
   return (
     <div
-      className="bg-gray-800/50 rounded-2xl p-3 sm:p-4 backdrop-blur-sm border border-gray-700"
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+      className="bg-gray-800/50 rounded-2xl p-3 sm:p-4 backdrop-blur-sm border border-gray-700 select-none touch-none"
     >
-      {/* 标题 */}
       <div className="flex items-center justify-between mb-2 sm:mb-3">
         <h3 className="text-white font-semibold flex items-center gap-2 text-sm sm:text-base">
           <LayoutGrid className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400" />
           Range 选择器
         </h3>
-        <div className="flex items-center gap-2">
-          <span className="text-emerald-400 text-xs font-mono">
-            {stats.count} combos ({stats.percentage}%)
-          </span>
-        </div>
+        <span className="text-emerald-400 text-xs font-mono bg-emerald-500/10 px-2 py-1 rounded">
+          {stats.count} combos ({stats.percentage}%)
+        </span>
       </div>
 
-      {/* 图例 */}
-      <div className="flex items-center justify-center gap-3 text-xs mb-2">
-        <div className="flex items-center gap-1">
-          <div className="w-3 h-3 bg-amber-500/30 rounded" />
-          <span className="text-gray-400">对子</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <div className="w-3 h-3 bg-cyan-500/30 rounded" />
-          <span className="text-gray-400">同花</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <div className="w-3 h-3 bg-gray-600 rounded" />
-          <span className="text-gray-400">非同花</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <div className="w-3 h-3 bg-emerald-500/60 rounded" />
-          <span className="text-gray-400">已选</span>
-        </div>
-      </div>
-
-      {/* 13x13 矩阵 */}
-      <div className="overflow-x-auto scrollbar-hide -mx-1 px-1">
+      {/* 📱 居中且自适应的矩阵容器 */}
+      <div className="flex justify-center w-full overflow-visible">
         <div
-          className="inline-block min-w-fit origin-top-left
-          transform scale-[0.72] sm:scale-[0.85] md:scale-100"
-          style={{ transformOrigin: 'top left' }}
+          ref={matrixRef}
+          className="inline-block origin-top scale-[0.80] sm:scale-[0.9] md:scale-100 touch-none"
+          onTouchMove={handleTouchMove}
         >
-          {/* 表头 */}
-          <div className="flex select-none">
+          <div className="flex">
             <div className="w-8 h-8" />
             {RANKS.map(rank => (
-              <div key={rank} className="w-9 h-8 flex items-center justify-center text-gray-400 text-sm font-medium">
-                {rank}
-              </div>
+              <div key={rank} className="w-9 h-8 flex items-center justify-center text-gray-400 text-sm font-medium">{rank}</div>
             ))}
           </div>
 
-          {/* 行 */}
           {RANKS.map((rowRank, row) => (
-            <div key={row} className="flex select-none">
-              <div className="w-8 h-9 flex items-center justify-center text-gray-400 text-sm font-medium">
-                {rowRank}
-              </div>
+            <div key={row} className="flex">
+              <div className="w-8 h-9 flex items-center justify-center text-gray-400 text-sm font-medium">{rowRank}</div>
               {RANKS.map((_, col) => {
-                const style = getCellStyle(row, col);
                 const combo = getComboName(row, col);
-                const count = comboSpecificCount(combo);
-
                 return (
                   <button
                     key={col}
+                    data-combo={combo}
+                    data-row={row}
+                    data-col={col}
                     onMouseDown={(e) => { e.preventDefault(); handleCellMouseDown(row, col); }}
                     onMouseEnter={() => handleCellMouseEnter(row, col)}
-                    onMouseLeave={() => setHoveredCell(null)}
+                    onTouchStart={(e) => { e.preventDefault(); handleTouchStart(row, col); }}
+                    onTouchEnd={handleTouchEnd}
                     className={`
                       w-9 h-9 flex items-center justify-center text-xs font-bold
-                      border transition-all duration-100 rounded cursor-pointer
-                      ${style.bg} ${style.text} ${style.border}
-                      hover:scale-110 hover:z-10 active:scale-95
+                      border transition-all duration-75 rounded cursor-pointer
+                      ${getCellStyle(row, col)}
                     `}
-                    title={`${combo} (${count} combos)`}
                   >
                     {combo}
                   </button>
@@ -253,59 +203,29 @@ export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [] }
         </div>
       </div>
 
-      {/* 快捷按钮 */}
-      <div className="mt-3 pt-3 border-t border-gray-700">
+      <div className="mt-2 pt-3 border-t border-gray-700">
         <div className="flex flex-wrap gap-1.5 justify-center">
           {Object.entries(TOP_RANGE_PRESETS).map(([key, preset]) => (
-            <button
-              key={key}
-              onClick={() => handlePreset(key)}
-              className="px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all
-                bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white active:scale-95"
-            >
+            <button key={key} onClick={() => handlePreset(key)} className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-gray-700 text-gray-300 hover:bg-gray-600 active:scale-95">
               {preset.label}
             </button>
           ))}
-          <button
-            onClick={handleSelectAll}
-            className="px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all
-              bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 active:scale-95"
-          >
-            全选
-          </button>
-          <button
-            onClick={handleClear}
-            className="px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all
-              bg-red-500/20 text-red-300 hover:bg-red-500/30 active:scale-95"
-          >
-            清空
-          </button>
+          <button onClick={handleSelectAll} className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-blue-500/20 text-blue-300">全选</button>
+          <button onClick={handleClear} className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-500/20 text-red-300">清空</button>
         </div>
       </div>
 
-      {/* Range 文本输入 */}
-      <div className="mt-3 pt-3 border-t border-gray-700">
-        <div className="flex items-center gap-2">
-          <Type className="w-4 h-4 text-gray-400 flex-shrink-0" />
-          <input
-            type="text"
-            value={rangeText}
-            onChange={(e) => setRangeText(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleTextSubmit(); }}
-            onBlur={handleTextSubmit}
-            placeholder="输入 range: AA, KK, AKs+, JJ-TT..."
-            className="flex-1 bg-gray-700 text-white text-xs rounded-lg px-3 py-2 min-h-[36px] font-mono
-              placeholder:text-gray-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-          />
-          <button
-            onClick={handleTextSubmit}
-            className="px-3 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg text-xs font-medium
-              hover:bg-emerald-500/30 active:scale-95 flex items-center gap-1"
-          >
-            <Zap className="w-3 h-3" />
-            应用
-          </button>
-        </div>
+      <div className="mt-3 pt-3 border-t border-gray-700 flex items-center gap-2">
+        <Type className="w-4 h-4 text-gray-400 flex-shrink-0" />
+        <input
+          type="text"
+          value={rangeText}
+          onChange={(e) => setRangeText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleTextSubmit(); }}
+          onBlur={handleTextSubmit}
+          placeholder="输入: AA, KK, AKs+, JJ-TT..."
+          className="flex-1 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 min-h-[36px] font-mono border border-gray-700 focus:outline-none focus:border-emerald-500"
+        />
       </div>
     </div>
   );
