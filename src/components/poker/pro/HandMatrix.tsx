@@ -147,7 +147,7 @@ export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [] }
 
   return (
     <div
-      className="bg-gray-800/50 rounded-2xl p-3 sm:p-4 backdrop-blur-sm border border-gray-700 select-none touch-none"
+      className="bg-gray-800/50 rounded-2xl p-3 sm:p-4 backdrop-blur-sm border border-gray-700 select-none"
     >
       <div className="flex items-center justify-between mb-2 sm:mb-3">
         <h3 className="text-white font-semibold flex items-center gap-2 text-sm sm:text-base">
@@ -308,17 +308,17 @@ export function CommunityCardMatrix({
         ))}
       </div>
 
-      {/* 点数选择 */}
+      {/* 点数选择 (compact for mobile) */}
       <div className="mb-3">
-        <div className="flex flex-wrap gap-1.5 sm:gap-1 justify-center">
+        <div className="flex flex-wrap gap-1 sm:gap-1.5 justify-center max-w-sm mx-auto">
           {RANKS.map(rank => (
             <button
               key={rank}
               onClick={() => setSelectedRank(selectedRank === rank ? null : rank)}
               className={`
-                w-9 h-10 sm:w-9 sm:h-9 rounded-xl font-bold text-sm transition-all min-h-[44px] sm:min-h-0
+                w-8 h-9 sm:w-9 sm:h-9 rounded-xl font-bold text-sm transition-all
                 ${selectedRank === rank
-                  ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white scale-105'
+                  ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white scale-105 shadow-md'
                   : 'bg-gray-700 text-gray-300 hover:bg-gray-600 active:scale-95'
                 }
               `}
@@ -329,9 +329,9 @@ export function CommunityCardMatrix({
         </div>
       </div>
 
-      {/* 花色选择 */}
+      {/* 花色选择 (compact) */}
       {selectedRank && (
-        <div className="flex gap-2 justify-center">
+        <div className="flex gap-2 justify-center pb-1">
           {SUITS.map(suit => {
             const disabled = isCardDisabled(selectedRank, suit);
             const isRed = suit === 'h' || suit === 'd';
@@ -342,11 +342,11 @@ export function CommunityCardMatrix({
                 onClick={() => handleCardSelect(selectedRank, suit)}
                 disabled={disabled}
                 className={`
-                  w-16 h-14 sm:w-14 sm:py-3 rounded-xl text-2xl font-bold transition-all min-h-[56px] sm:min-h-0
-                  active:scale-95
+                  w-14 h-12 sm:w-14 sm:h-12 rounded-xl text-2xl font-bold transition-all
+                  active:scale-95 flex items-center justify-center
                   ${disabled
                     ? 'bg-gray-800 text-gray-600 cursor-not-allowed opacity-50'
-                    : 'bg-gray-700 hover:bg-gray-600 active:bg-gray-600'
+                    : 'bg-gray-700 hover:bg-gray-600 shadow-md'
                   }
                   ${isRed && !disabled ? 'text-red-400' : !disabled ? 'text-white' : ''}
                 `}

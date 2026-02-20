@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo, lazy, Suspense } from 'react';
+import { useState, useCallback, useMemo, useEffect, lazy, Suspense } from 'react';
 import { Drawer } from 'vaul';
 import {
   Calculator,
@@ -113,6 +113,93 @@ export function PokerCalculatorPro() {
     if (!equityResult) return null;
     return calculateEVAdvanced(equityResult.win, potSize, betSize, foldEquity);
   }, [equityResult, potSize, betSize, foldEquity]);
+
+  // ====== Card → CardIndex 转换 ======
+  const RANK_TO_IDX: Record<string, number> = {
+    '2': 0, '3': 1, '4': 2, '5': 3, '6': 4, '7': 5, '8': 6,
+    '9': 7, 'T': 8, 'J': 9, 'Q': 10, 'K': 11, 'A': 12
+  };
+  const SUIT_TO_IDX: Record<string, number> = { 's': 0, 'h': 1, 'd': 2, 'c': 3 };
+  const cardToIdx = (card: Card) => RANK_TO_IDX[card.rank] * 4 + SUIT_TO_IDX[card.suit];
+
+  // ====== Phase 2: 延迟加载分析计算 ======
+  useEffect(() => {
+    // 需要 range 和 flop 以上才分析
+    if (!hasRange || communityCards.length < 3) {
+      setOutsResult(null);
+      setNutResult(null);
+      setBlockerResult(null);
+      setStreetEquity(null);
+      return;
+    }
+
+    // 取 range 中第一个 combo 作为代表手牌
+    const combos = Array.from(playerRange);
+    const firstCombo = combos[0];
+    if (!firstCombo) return;
+
+    // 解析代表手牌为 [CardIndex, CardIndex]
+    const r1 = RANK_TO_IDX[firstCombo[0]];
+    const r2 = RANK_TO_IDX[firstCombo[1]];
+    if (r1 === undefined || r2 === undefined) return;
+
+    let heroCards: [number, number];
+    if (firstCombo.length === 2 && firstCombo[0] === firstCombo[1]) {
+      // Pocket pair: 取 spade + heart
+      heroCards = [r1 * 4 + 0, r1 * 4 + 1];
+    } else if (firstCombo[2] === 's') {
+      // Suited: 两张同花 spade
+      heroCards = [r1 * 4 + 0, r2 * 4 + 0];
+    } else {
+      // Offsuit: spade + heart
+      heroCards = [r1 * 4 + 0, r2 * 4 + 1];
+    }
+
+    // 确保 hero 不与 board 冲突
+    const boardIdx = communityCards.map(cardToIdx);
+    const boardSet = new Set(boardIdx);
+    if (boardSet.has(heroCards[0]) || boardSet.has(heroCards[1])) return;
+
+    let cancelled = false;
+
+    // Outs (flop/turn only, river 没有 outs)
+    if (communityCards.length <= 4) {
+      loadOutsDetector().then(m => {
+        if (cancelled) return;
+        try {
+          setOutsResult(m.detectOuts(heroCards, boardIdx));
+        } catch { setOutsResult(null); }
+      });
+    } else {
+      setOutsResult(null);
+    }
+
+    // Nuts
+    loadNutDetector().then(m => {
+      if (cancelled) return;
+      try {
+        setNutResult(m.detectNuts(heroCards, boardIdx));
+      } catch { setNutResult(null); }
+    });
+
+    // Blockers
+    loadBlockerAnalysis().then(m => {
+      if (cancelled) return;
+      try {
+        setBlockerResult(m.analyzeBlockers(heroCards, combos, boardIdx));
+      } catch { setBlockerResult(null); }
+    });
+
+    // Street Equity
+    loadStreetEquity().then(m => {
+      if (cancelled) return;
+      try {
+        setStreetEquity(m.calculateStreetEquityShift(heroCards, null, boardIdx, 10000));
+      } catch { setStreetEquity(null); }
+    });
+
+    return () => { cancelled = true; };
+  }, [communityCards, playerRange, equityResult]);
 
   // Range 变化时触发模拟
   const handleRangeChange = useCallback((combos: Set<HandCombo>, str: string) => {
