@@ -3,25 +3,25 @@
 import { useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { BarChart3 } from 'lucide-react';
-import { ComboEquity } from '@/lib/poker/pro-types';
+import { HandCombo } from '@/lib/poker/pro-types';
 
 interface EquityChartProps {
-    equityByCombo: Record<string, ComboEquity>;
+    equityByCombo: Record<HandCombo, { wins: number; total: number; equity: number }>;
     className?: string;
 }
 
 function getEquityColor(equity: number): string {
-    if (equity >= 60) return '#10b981'; // emerald
-    if (equity >= 50) return '#84cc16'; // lime
-    if (equity >= 40) return '#eab308'; // yellow
-    if (equity >= 30) return '#f97316'; // orange
-    return '#ef4444'; // red
+    if (equity >= 60) return '#10b981';
+    if (equity >= 50) return '#84cc16';
+    if (equity >= 40) return '#eab308';
+    if (equity >= 30) return '#f97316';
+    return '#ef4444';
 }
 
 export function EquityChart({ equityByCombo, className = '' }: EquityChartProps) {
     const data = useMemo(() => {
         return Object.entries(equityByCombo)
-            .filter(([_, v]) => v.total > 0)
+            .filter(([, v]) => v.total > 0)
             .map(([combo, v]) => ({
                 combo,
                 equity: Math.round(v.equity * 10) / 10,
@@ -66,8 +66,9 @@ export function EquityChart({ equityByCombo, className = '' }: EquityChartProps)
                                 color: '#fff',
                                 fontSize: '13px'
                             }}
-                            formatter={(value: number, _name: string, entry: { payload: { total: number } }) => [
-                                `${value}% (${entry.payload.total} 样本)`,
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            formatter={(value: number, _name: string, entry: any) => [
+                                `${value}% (${entry?.payload?.total ?? 0} 样本)`,
                                 'Equity'
                             ]}
                         />
