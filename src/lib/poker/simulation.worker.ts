@@ -4,6 +4,8 @@
 // ============================================
 
 import { Card, Rank, Suit, HandRank, HandCombo, OpponentType, RANKS, SUITS } from './pro-types';
+import { calculateRangeEquity, OPPONENT_RANGES as ENGINE_OPP_RANGES } from '../../engine/rangeEquity';
+import { cardIndex, RANK_MAP, SUIT_MAP } from '../../engine/card';
 
 // 点数值
 const RANK_VALUES: Record<Rank, number> = {
@@ -325,173 +327,15 @@ function runSimulation(request: SimulationRequest): void {
 }
 
 // ============================================
-// 🔥 HIGH-PERFORMANCE BITMASK ENGINE
+// 🔥 ENGINE DELEGATION — Range 计算委托给 src/engine/
 // ============================================
 
-// Suit → index mapping (s=0, h=1, d=2, c=3 — matches SUITS order)
-const SUIT_IDX: Record<Suit, number> = { 's': 0, 'h': 1, 'd': 2, 'c': 3 };
-
-// Rank char → 0-12 (2=0, 3=1, ..., A=12) for CardIndex encoding
-const RANK_IDX: Record<string, number> = {
-  '2': 0, '3': 1, '4': 2, '5': 3, '6': 4, '7': 5, '8': 6,
-  '9': 7, 'T': 8, 'J': 9, 'Q': 10, 'K': 11, 'A': 12
-};
-
-// Pre-encoded hand: two card indices + split bitmask for O(1) conflict
-interface FastHand {
-  c1: number;    // CardIndex 0-51
-  c2: number;    // CardIndex 0-51
-  lo: number;    // bitmask bits 0-25 (cards 0-25)
-  hi: number;    // bitmask bits 0-25 (cards 26-51)
-  combo: string; // original combo name
-}
-
+// Card → CardIndex 转换
 function cardToIdx(card: Card): number {
-  return (RANK_VALUES[card.rank] - 2) * 4 + SUIT_IDX[card.suit];
+  return (RANK_VALUES[card.rank] - 2) * 4 + (SUIT_MAP[card.suit] ?? 0);
 }
 
-function bitLo(card: number): number { return card < 26 ? (1 << card) : 0; }
-function bitHi(card: number): number { return card >= 26 ? (1 << (card - 26)) : 0; }
-
-// Expand "AA", "AKs", "AKo" → all concrete [c1, c2] pairs
-function expandCombo(combo: HandCombo): FastHand[] {
-  const hands: FastHand[] = [];
-  const r1 = RANK_IDX[combo[0]];
-  if (r1 === undefined) return [];
-
-  if (combo.length === 2 && combo[0] === combo[1]) {
-    // Pocket pair: C(4,2) = 6 combos
-    for (let s1 = 0; s1 < 4; s1++) {
-      for (let s2 = s1 + 1; s2 < 4; s2++) {
-        const c1 = r1 * 4 + s1, c2 = r1 * 4 + s2;
-        hands.push({ c1, c2, lo: bitLo(c1) | bitLo(c2), hi: bitHi(c1) | bitHi(c2), combo });
-      }
-    }
-  } else {
-    const r2 = RANK_IDX[combo[1]];
-    if (r2 === undefined) return [];
-    const isSuited = combo[2] === 's';
-    if (isSuited) {
-      for (let s = 0; s < 4; s++) {
-        const c1 = r1 * 4 + s, c2 = r2 * 4 + s;
-        hands.push({ c1, c2, lo: bitLo(c1) | bitLo(c2), hi: bitHi(c1) | bitHi(c2), combo });
-      }
-    } else {
-      // offsuit (also handles no-suffix non-pair)
-      for (let s1 = 0; s1 < 4; s1++) {
-        for (let s2 = 0; s2 < 4; s2++) {
-          if (s1 !== s2) {
-            const c1 = r1 * 4 + s1, c2 = r2 * 4 + s2;
-            hands.push({ c1, c2, lo: bitLo(c1) | bitLo(c2), hi: bitHi(c1) | bitHi(c2), combo });
-          }
-        }
-      }
-    }
-  }
-  return hands;
-}
-
-// 7-card evaluator working directly on CardIndex (0-51)
-// Returns numeric score: higher = better.  Properly ranks all hand types.
-function evaluateFast7(indices: number[]): number {
-  const rc = new Int8Array(13); // rank counts
-  const sc = new Int8Array(4);  // suit counts
-  const sr: number[][] = [[], [], [], []]; // ranks per suit
-
-  for (let i = 0; i < indices.length; i++) {
-    const r = indices[i] >> 2;   // rank = floor(idx/4)
-    const s = indices[i] & 3;    // suit = idx % 4
-    rc[r]++;
-    sc[s]++;
-    sr[s].push(r);
-  }
-
-  // Flush suit?
-  let fSuit = -1;
-  for (let s = 0; s < 4; s++) { if (sc[s] >= 5) { fSuit = s; break; } }
-
-  // Straight detection (works on any set of ranks)
-  function findStraightHigh(ranks: number[]): number {
-    const has = new Uint8Array(14);
-    for (const r of ranks) has[r] = 1;
-    // Check A-high(12) down to 5-high(3), then wheel(A=low)
-    for (let top = 12; top >= 3; top--) {
-      if (has[top] && has[top - 1] && has[top - 2] && has[top - 3] && has[top === 3 ? 12 : top - 4]) {
-        return top;
-      }
-    }
-    return -1;
-  }
-
-  // Unique ranks present
-  const uRanks: number[] = [];
-  for (let r = 12; r >= 0; r--) { if (rc[r] > 0) uRanks.push(r); }
-
-  const straightH = findStraightHigh(uRanks);
-
-  // Straight flush check
-  if (fSuit >= 0) {
-    const sfH = findStraightHigh(sr[fSuit]);
-    if (sfH >= 0) return sfH === 12 ? 9000014 : 8000000 + sfH;
-  }
-
-  // Count multiples
-  let quads = -1, trips = -1, trips2 = -1;
-  const pairR: number[] = [];
-  for (let r = 12; r >= 0; r--) {
-    if (rc[r] === 4) quads = r;
-    else if (rc[r] === 3) { if (trips < 0) trips = r; else trips2 = r; }
-    else if (rc[r] === 2) pairR.push(r);
-  }
-
-  if (quads >= 0) {
-    const k = uRanks.find(r => r !== quads) || 0;
-    return 7000000 + quads * 100 + k;
-  }
-  if (trips >= 0 && (pairR.length > 0 || trips2 >= 0)) {
-    const p = trips2 >= 0 ? Math.max(trips2, pairR[0] ?? -1) : pairR[0];
-    return 6000000 + trips * 100 + (p ?? 0);
-  }
-  if (fSuit >= 0) {
-    const fr = sr[fSuit].sort((a, b) => b - a);
-    return 5000000 + fr[0] * 50625 + fr[1] * 3375 + fr[2] * 225 + fr[3] * 15 + fr[4];
-  }
-  if (straightH >= 0) return 4000000 + straightH;
-  if (trips >= 0) {
-    const k = uRanks.filter(r => r !== trips);
-    return 3000000 + trips * 10000 + (k[0] || 0) * 100 + (k[1] || 0);
-  }
-  if (pairR.length >= 2) {
-    const k = uRanks.find(r => r !== pairR[0] && r !== pairR[1]) || 0;
-    return 2000000 + pairR[0] * 10000 + pairR[1] * 100 + k;
-  }
-  if (pairR.length === 1) {
-    const k = uRanks.filter(r => r !== pairR[0]);
-    return 1000000 + pairR[0] * 1000000 + (k[0] || 0) * 10000 + (k[1] || 0) * 100 + (k[2] || 0);
-  }
-  // High card
-  return uRanks[0] * 50625 + uRanks[1] * 3375 + uRanks[2] * 225 + uRanks[3] * 15 + uRanks[4];
-}
-
-// Pre-allocated deck buffer for zero-alloc per-iteration
-const _deckBuf = new Int32Array(52);
-
-function buildDeckExcluding(dLo: number, dHi: number): number {
-  let n = 0;
-  for (let i = 0; i < 26; i++) { if (!((dLo >>> i) & 1)) _deckBuf[n++] = i; }
-  for (let i = 0; i < 26; i++) { if (!((dHi >>> i) & 1)) _deckBuf[n++] = i + 26; }
-  return n;
-}
-
-// Partial Fisher-Yates (shuffle first k elements)
-function partialShuffle(len: number, k: number): void {
-  for (let i = 0; i < k && i < len - 1; i++) {
-    const j = i + Math.floor(Math.random() * (len - i));
-    const tmp = _deckBuf[i]; _deckBuf[i] = _deckBuf[j]; _deckBuf[j] = tmp;
-  }
-}
-
-// 🔥 High-performance Range vs Range (single-layer MC, bitmask conflicts)
+// 🔥 Range vs Range — 委托给专业引擎
 function runRangeSimulation(
   playerRange: HandCombo[],
   communityCards: Card[],
@@ -499,157 +343,61 @@ function runRangeSimulation(
   opponentCount: number,
   simulations: number
 ): void {
-  // === PRE-ENCODE PHASE (one-time cost) ===
-  const heroHands: FastHand[] = [];
-  for (const combo of playerRange) heroHands.push(...expandCombo(combo));
+  // 转换公共牌为 CardIndex[]
+  const boardCards = communityCards.map(cardToIdx);
 
-  const oppRangeCombos = OPPONENT_RANGES[opponentType];
-  const useOppRange = opponentType !== 'random' && oppRangeCombos.length > 0;
-  const villainHands = useOppRange ? ([] as FastHand[]) : null;
-  if (villainHands) {
-    for (const combo of oppRangeCombos) villainHands.push(...expandCombo(combo));
-  }
+  // 获取对手 range combos
+  const oppCombos = ENGINE_OPP_RANGES[opponentType] || [];
 
-  // Board bitmask
-  let boardLo = 0, boardHi = 0;
-  const boardIdx: number[] = [];
-  for (const c of communityCards) {
-    const idx = cardToIdx(c);
-    boardIdx.push(idx);
-    boardLo |= bitLo(idx);
-    boardHi |= bitHi(idx);
-  }
-  const cardsNeeded = 5 - boardIdx.length;
-
-  // Per-combo tracking
-  const comboStats: Record<string, { wins: number; ties: number; total: number }> = {};
-  for (const combo of playerRange) comboStats[combo] = { wins: 0, ties: 0, total: 0 };
-
-  let totalWins = 0, totalTies = 0, totalLosses = 0, validSims = 0;
-  const progressInterval = Math.max(1000, Math.floor(simulations / 20));
-
-  if (heroHands.length === 0) return;
-
-  // === MAIN SIMULATION LOOP (single-layer MC) ===
-  const eval7buf = new Array(7);
-
-  for (let iter = 0; iter < simulations; iter++) {
-    // 1. Sample random hero hand
-    const hero = heroHands[Math.floor(Math.random() * heroHands.length)];
-    if ((hero.lo & boardLo) || (hero.hi & boardHi)) continue; // board conflict
-
-    let deadLo = hero.lo | boardLo;
-    let deadHi = hero.hi | boardHi;
-
-    // 2. Sample villain hand(s)
-    let villainC1 = -1, villainC2 = -1;
-    let valid = true;
-
-    if (villainHands) {
-      const v = villainHands[Math.floor(Math.random() * villainHands.length)];
-      if ((v.lo & deadLo) || (v.hi & deadHi)) continue; // conflict
-      villainC1 = v.c1; villainC2 = v.c2;
-      deadLo |= v.lo; deadHi |= v.hi;
-    } else {
-      // Random opponent: deal from remaining deck
-      const deckLen = buildDeckExcluding(deadLo, deadHi);
-      if (deckLen < 2 + cardsNeeded) continue;
-      partialShuffle(deckLen, 2 + cardsNeeded);
-      villainC1 = _deckBuf[0]; villainC2 = _deckBuf[1];
-      // Board cards come from _deckBuf[2..2+cardsNeeded]
-      eval7buf[0] = hero.c1; eval7buf[1] = hero.c2;
-      eval7buf[2] = villainC1; eval7buf[3] = villainC2; // temp for villain
-      let bi = 0;
-      for (; bi < boardIdx.length; bi++) eval7buf[2 + bi] = boardIdx[bi];
-      for (let j = 0; j < cardsNeeded; j++) eval7buf[2 + bi + j] = _deckBuf[2 + j];
-
-      // Evaluate — hero
-      const heroCards7 = [hero.c1, hero.c2];
-      for (let b = 0; b < boardIdx.length; b++) heroCards7.push(boardIdx[b]);
-      for (let j = 0; j < cardsNeeded; j++) heroCards7.push(_deckBuf[2 + j]);
-      const heroScore = evaluateFast7(heroCards7);
-
-      const villCards7 = [villainC1, villainC2];
-      for (let b = 0; b < boardIdx.length; b++) villCards7.push(boardIdx[b]);
-      for (let j = 0; j < cardsNeeded; j++) villCards7.push(_deckBuf[2 + j]);
-      const villScore = evaluateFast7(villCards7);
-
-      if (heroScore > villScore) { totalWins++; comboStats[hero.combo].wins++; }
-      else if (heroScore === villScore) { totalTies++; comboStats[hero.combo].ties++; }
-      else { totalLosses++; }
-      comboStats[hero.combo].total++;
-      validSims++;
-
-      if (validSims % progressInterval === 0) {
-        self.postMessage({
-          type: 'progress', progress: (validSims / simulations) * 100,
-          currentWins: totalWins, currentTies: totalTies,
-          currentLosses: totalLosses, currentSimulations: validSims
-        } as ProgressUpdate);
-      }
-      continue;
-    }
-
-    // 3. Deal remaining board (ranged opponent path)
-    const deckLen = buildDeckExcluding(deadLo, deadHi);
-    if (deckLen < cardsNeeded) continue;
-    partialShuffle(deckLen, cardsNeeded);
-
-    const heroCards7 = [hero.c1, hero.c2, ...boardIdx];
-    const villCards7 = [villainC1, villainC2, ...boardIdx];
-    for (let j = 0; j < cardsNeeded; j++) {
-      heroCards7.push(_deckBuf[j]);
-      villCards7.push(_deckBuf[j]);
-    }
-
-    const heroScore = evaluateFast7(heroCards7);
-    const villScore = evaluateFast7(villCards7);
-
-    if (heroScore > villScore) { totalWins++; comboStats[hero.combo].wins++; }
-    else if (heroScore === villScore) { totalTies++; comboStats[hero.combo].ties++; }
-    else { totalLosses++; }
-    comboStats[hero.combo].total++;
-    validSims++;
-
-    if (validSims % progressInterval === 0) {
+  // 🔥 调用专业引擎
+  const result = calculateRangeEquity(
+    playerRange,
+    oppCombos,
+    boardCards,
+    simulations,
+    (pct, wins, ties, losses, sims) => {
       self.postMessage({
-        type: 'progress', progress: (validSims / simulations) * 100,
-        currentWins: totalWins, currentTies: totalTies,
-        currentLosses: totalLosses, currentSimulations: validSims
+        type: 'progress',
+        progress: pct,
+        currentWins: wins,
+        currentTies: ties,
+        currentLosses: losses,
+        currentSimulations: sims
       } as ProgressUpdate);
     }
-  }
+  );
 
-  // === OUTPUT PHASE ===
+  // 转换引擎输出 → 现有 worker 消息格式
+  const total = result.totalSimulations;
+  const wins = result.player1.win;
+  const ties = result.player1.tie;
+  const losses = result.player2.win;
+
+  // 构建 equityByCombo
   const equityByCombo: Record<HandCombo, ComboEquityData> = {} as any;
   for (const combo of playerRange) {
-    const s = comboStats[combo];
-    equityByCombo[combo] = {
-      wins: s.wins, total: s.total,
-      equity: s.total > 0 ? (s.wins / s.total) * 100 : 0
-    };
+    const s = result.comboStats[combo];
+    if (s) {
+      equityByCombo[combo] = {
+        wins: s.wins, total: s.total,
+        equity: s.total > 0 ? (s.wins / s.total) * 100 : 0
+      };
+    }
   }
 
-  const histogram: HistogramBucket[] = [];
-  for (let i = 0; i < 10; i++) histogram.push({ rangeStart: i * 10, rangeEnd: (i + 1) * 10, count: 0 });
-  for (const combo of playerRange) {
-    const bucket = Math.min(9, Math.floor(equityByCombo[combo].equity / 10));
-    histogram[bucket].count++;
-  }
-
-  const confidence = validSims > 0
-    ? 1.96 * Math.sqrt((totalWins / validSims * (1 - totalWins / validSims)) / validSims) * 100
+  const confidence = total > 0
+    ? 1.96 * Math.sqrt((wins / total * (1 - wins / total)) / total) * 100
     : 0;
 
   self.postMessage({
     type: 'complete',
-    win: validSims > 0 ? (totalWins / validSims) * 100 : 0,
-    tie: validSims > 0 ? (totalTies / validSims) * 100 : 0,
-    lose: validSims > 0 ? (totalLosses / validSims) * 100 : 0,
-    simulations: validSims,
+    win: total > 0 ? (wins / total) * 100 : 0,
+    tie: total > 0 ? (ties / total) * 100 : 0,
+    lose: total > 0 ? (losses / total) * 100 : 0,
+    simulations: total,
     confidence: Math.round((1 - confidence / 100) * 1000) / 10,
     equityByCombo,
-    equityHistogram: histogram
+    equityHistogram: result.histogram
   } as SimulationResult);
 }
 
