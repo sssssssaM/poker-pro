@@ -8,10 +8,10 @@ import {
     Shield,
     Layers,
     Zap,
-    ChevronRight,
     ArrowUp,
     ArrowDown,
-    Minus
+    Minus,
+    BarChart3
 } from 'lucide-react';
 import { CardIndex, cardToString } from '@/lib/poker/card';
 import type {
@@ -37,6 +37,10 @@ interface AnalysisTabsProps {
     equityLose: number;
     simulations: number;
     rangeString: string;
+
+    // Combo breakdown & histogram
+    equityByCombo?: Record<string, { wins: number; total: number; equity: number }>;
+    equityHistogram?: { rangeStart: number; rangeEnd: number; count: number }[];
 
     // Phase 2 分析数据 (可选, 按需加载后传入)
     outsResult?: OutsResult | null;
@@ -71,6 +75,7 @@ const TABS: { id: AnalysisTab; label: string; icon: React.ReactNode }[] = [
 // ============================================
 export function AnalysisTabs({
     equityWin, equityTie, equityLose, simulations, rangeString,
+    equityByCombo, equityHistogram,
     outsResult, potOddsResult, evResult, blockerResult, streetEquity, nutResult,
     foldEquity, onFoldEquityChange, potSize, betSize,
     compact = false
@@ -111,6 +116,8 @@ export function AnalysisTabs({
                     <EquityPanel
                         win={equityWin} tie={equityTie} lose={equityLose}
                         simulations={simulations} rangeString={rangeString}
+                        equityByCombo={equityByCombo}
+                        equityHistogram={equityHistogram}
                         streetEquity={streetEquity} nutResult={nutResult}
                         compact={compact}
                     />
@@ -138,14 +145,17 @@ export function AnalysisTabs({
 }
 
 // ============================================
-// Equity 面板
+// Equity 面板 — 结构化 Metric/Value 表格
 // ============================================
 function EquityPanel({
     win, tie, lose, simulations, rangeString,
+    equityByCombo, equityHistogram,
     streetEquity, nutResult, compact
 }: {
     win: number; tie: number; lose: number;
     simulations: number; rangeString: string;
+    equityByCombo?: Record<string, { wins: number; total: number; equity: number }>;
+    equityHistogram?: { rangeStart: number; rangeEnd: number; count: number }[];
     streetEquity?: StreetEquityResult | null;
     nutResult?: NutResult | null;
     compact?: boolean;
@@ -153,9 +163,24 @@ function EquityPanel({
     const equityColor = getEquityColor(win);
     const gradientClass = getEquityGradient(win);
 
+    // 计算 combo 统计
+    const comboData = useMemo(() => {
+        if (!equityByCombo) return null;
+        const entries = Object.entries(equityByCombo).filter(([, v]) => v.total > 0);
+        if (entries.length === 0) return null;
+        const sorted = entries.sort((a, b) => b[1].equity - a[1].equity);
+        const avgEquity = sorted.reduce((s, [, v]) => s + v.equity, 0) / sorted.length;
+        return {
+            best: sorted[0],
+            worst: sorted[sorted.length - 1],
+            avgEquity,
+            sorted
+        };
+    }, [equityByCombo]);
+
     return (
         <div className="space-y-3">
-            {/* 主 Equity 显示 */}
+            {/* 大号 Equity + 三色进度条 */}
             <div className="flex items-center justify-between">
                 <div className="min-w-0">
                     <div className="text-gray-400 text-xs mb-0.5">你的 Range</div>
@@ -171,12 +196,20 @@ function EquityPanel({
                 </div>
             </div>
 
-            {/* Equity 进度条 */}
+            {/* 三色进度条 (Win + Tie + Lose 渐变) */}
             <div>
-                <div className="h-3 bg-gray-700 rounded-full overflow-hidden">
+                <div className="h-3 bg-gray-700 rounded-full overflow-hidden flex">
                     <div
-                        className={`h-full bg-gradient-to-r ${gradientClass} transition-all duration-500`}
+                        className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-500"
                         style={{ width: `${win}%` }}
+                    />
+                    <div
+                        className="h-full bg-yellow-500 transition-all duration-500"
+                        style={{ width: `${tie}%` }}
+                    />
+                    <div
+                        className="h-full bg-gradient-to-r from-red-500 to-red-400 transition-all duration-500"
+                        style={{ width: `${lose}%` }}
                     />
                 </div>
                 <div className="flex justify-between text-[10px] text-gray-500 mt-0.5">
@@ -184,22 +217,38 @@ function EquityPanel({
                 </div>
             </div>
 
-            {/* 三项统计 */}
-            <div className="grid grid-cols-4 gap-1.5">
-                {[
-                    { label: '胜', value: win, color: 'text-emerald-400' },
-                    { label: '平', value: tie, color: 'text-yellow-400' },
-                    { label: '负', value: lose, color: 'text-red-400' },
-                    { label: '样本', value: simulations, color: 'text-blue-400', isInt: true }
-                ].map(item => (
-                    <div key={item.label} className="bg-gray-900/50 rounded-lg p-2 text-center">
-                        <div className={`${item.color} text-sm font-bold`}>
-                            {item.isInt ? (item.value >= 1000 ? `${(item.value / 1000).toFixed(0)}K` : item.value) : `${item.value.toFixed(compact ? 0 : 1)}%`}
-                        </div>
-                        <div className="text-gray-500 text-[10px]">{item.label}</div>
-                    </div>
-                ))}
+            {/* ========== 结构化 Metric / Value 表格 ========== */}
+            <div className="bg-gray-900/40 rounded-xl overflow-hidden border border-gray-700/50">
+                <table className="w-full text-sm">
+                    <tbody>
+                        <MetricRow label="Win %" value={`${win.toFixed(1)}%`} color="text-emerald-400" />
+                        <MetricRow label="Tie %" value={`${tie.toFixed(1)}%`} color="text-yellow-400" />
+                        <MetricRow label="Loss %" value={`${lose.toFixed(1)}%`} color="text-red-400" />
+                        <MetricRow
+                            label="Simulations"
+                            value={simulations >= 1000 ? `${(simulations / 1000).toFixed(0)}K` : `${simulations}`}
+                            color="text-blue-400"
+                        />
+                        {comboData && (
+                            <>
+                                <MetricRow label="Best Combo" value={comboData.best[0]} color="text-emerald-400" />
+                                <MetricRow label="Worst Combo" value={comboData.worst[0]} color="text-red-400" />
+                                <MetricRow label="Avg Equity" value={`${comboData.avgEquity.toFixed(1)}%`} color="text-cyan-400" />
+                            </>
+                        )}
+                    </tbody>
+                </table>
             </div>
+
+            {/* ========== Equity 直方图 (纯 CSS) ========== */}
+            {equityHistogram && equityHistogram.some(b => b.count > 0) && (
+                <div className="bg-gray-900/30 rounded-xl p-3 border border-gray-700/30">
+                    <div className="text-gray-400 text-xs mb-2 flex items-center gap-1">
+                        <BarChart3 className="w-3 h-3" /> Equity 分布直方图
+                    </div>
+                    <EquityHistogramChart histogram={equityHistogram} />
+                </div>
+            )}
 
             {/* 街道 Equity 变化 */}
             {streetEquity && (
@@ -255,6 +304,48 @@ function EquityPanel({
 }
 
 // ============================================
+// Metric Row 组件
+// ============================================
+function MetricRow({ label, value, color }: { label: string; value: string; color: string }) {
+    return (
+        <tr className="border-b border-gray-700/30 last:border-0">
+            <td className="px-3 py-2 text-gray-400 text-xs">{label}</td>
+            <td className={`px-3 py-2 text-right font-bold text-sm ${color}`}>{value}</td>
+        </tr>
+    );
+}
+
+// ============================================
+// Equity Histogram (纯 CSS 条形图)
+// ============================================
+function EquityHistogramChart({ histogram }: { histogram: { rangeStart: number; rangeEnd: number; count: number }[] }) {
+    const maxCount = Math.max(...histogram.map(b => b.count), 1);
+
+    return (
+        <div className="flex items-end gap-1 h-20">
+            {histogram.map((bucket, i) => {
+                const height = bucket.count > 0 ? Math.max(4, (bucket.count / maxCount) * 100) : 0;
+                const barColor = i < 3 ? 'bg-red-500/60' : i < 5 ? 'bg-yellow-500/60' : i < 7 ? 'bg-lime-500/60' : 'bg-emerald-500/60';
+                return (
+                    <div key={i} className="flex-1 flex flex-col items-center gap-0.5">
+                        <div className="w-full relative" style={{ height: '80px' }}>
+                            <div
+                                className={`absolute bottom-0 w-full ${barColor} rounded-t transition-all duration-300`}
+                                style={{ height: `${height}%` }}
+                            />
+                        </div>
+                        {bucket.count > 0 && (
+                            <span className="text-[8px] text-gray-500">{bucket.count}</span>
+                        )}
+                        <span className="text-[8px] text-gray-600">{bucket.rangeStart}</span>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+// ============================================
 // Outs 面板
 // ============================================
 function OutsPanel({ result, compact }: { result?: OutsResult | null; compact?: boolean }) {
@@ -270,15 +361,12 @@ function OutsPanel({ result, compact }: { result?: OutsResult | null; compact?: 
 
     return (
         <div className="space-y-3">
-            {/* 总 Outs */}
             <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 rounded-xl p-3 border border-amber-500/20">
                 <div className="flex items-center justify-between">
                     <div className="text-amber-400 text-xs font-medium">总 Outs</div>
                     <div className="text-amber-400 text-2xl font-bold">{result.totalOuts}</div>
                 </div>
             </div>
-
-            {/* 听牌类型分组 */}
             <div className="space-y-2">
                 {result.drawTypes.map(draw => (
                     <DrawTypeRow key={draw.type} draw={draw} />
@@ -340,7 +428,6 @@ function EVPanel({
 }) {
     return (
         <div className="space-y-3">
-            {/* Pot Odds */}
             {potOddsResult && (
                 <div className="grid grid-cols-2 gap-2">
                     <div className="bg-gray-900/50 rounded-lg p-2.5 text-center">
@@ -354,7 +441,6 @@ function EVPanel({
                 </div>
             )}
 
-            {/* Fold Equity 滑块 */}
             <div className="bg-gray-900/30 rounded-xl p-3">
                 <div className="flex items-center justify-between mb-2">
                     <span className="text-gray-400 text-xs">弃牌率 (Fold Equity)</span>
@@ -368,7 +454,7 @@ function EVPanel({
                     value={foldEquity}
                     onChange={e => onFoldEquityChange(Number(e.target.value))}
                     className="w-full h-2 bg-gray-700 rounded-full appearance-none cursor-pointer
-                        [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5
+                        [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
                         [&::-webkit-slider-thumb]:bg-emerald-500 [&::-webkit-slider-thumb]:rounded-full
                         [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:shadow-emerald-500/30"
                 />
@@ -377,7 +463,6 @@ function EVPanel({
                 </div>
             </div>
 
-            {/* EV 结果 */}
             {evResult && (
                 <>
                     <div className={`rounded-xl p-3 text-center ${evResult.isPositiveEV ? 'bg-emerald-500/10 border border-emerald-500/20' : 'bg-red-500/10 border border-red-500/20'}`}>
@@ -400,7 +485,6 @@ function EVPanel({
                         </div>
                     </div>
 
-                    {/* 建议 */}
                     <div className="bg-gray-900/30 rounded-xl p-3">
                         <div className="text-sm">{evResult.recommendation}</div>
                         {evResult.minFoldEquity > 0 && (
@@ -438,7 +522,6 @@ function BlockerPanel({ result, compact }: { result?: BlockerResult | null; comp
 
     return (
         <div className="space-y-3">
-            {/* 总体统计 */}
             <div className="bg-gradient-to-r from-purple-500/10 to-pink-500/10 rounded-xl p-3 border border-purple-500/20">
                 <div className="flex items-center justify-between">
                     <div>
@@ -453,7 +536,6 @@ function BlockerPanel({ result, compact }: { result?: BlockerResult | null; comp
                 </div>
             </div>
 
-            {/* Combo 列表 */}
             <div className="space-y-1 max-h-[250px] overflow-y-auto">
                 {result.blockerDetails.slice(0, 15).map(info => (
                     <BlockerRow key={info.combo} info={info} />

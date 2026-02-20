@@ -1,26 +1,19 @@
 'use client';
 
 import { useState, useCallback, useMemo, lazy, Suspense } from 'react';
-import { Drawer, DrawerContent, DrawerTrigger, DrawerTitle } from '@/components/ui/drawer';
 import {
   Calculator,
   Users,
-  Coins,
-  Play,
   ChevronUp,
   ChevronDown,
-  TrendingUp,
-  BarChart3,
   Target,
   Zap,
   RotateCcw,
-  CheckCircle2,
-  XCircle,
   AlertCircle,
   LayoutGrid,
   SlidersHorizontal
 } from 'lucide-react';
-import { Card, Street, OpponentType, HandCombo, OPPONENT_PROFILES, SUIT_SYMBOLS } from '@/lib/poker/pro-types';
+import { Card, Street, OpponentType, HandCombo } from '@/lib/poker/pro-types';
 import { RangeMatrix, CommunityCardMatrix } from './HandMatrix';
 import { AnalysisTabs } from './AnalysisTabs';
 import { useSimulationWorker } from '@/hooks/useSimulationWorker';
@@ -57,7 +50,7 @@ export function PokerCalculatorPro() {
   // ====== 模拟次数 ======
   const [simulations, setSimulations] = useState(100000);
 
-  // ====== UI 状态 (Phase 3) ======
+  // ====== UI 状态 ======
   const [rangeExpanded, setRangeExpanded] = useState(false);
   const [settingsExpanded, setSettingsExpanded] = useState(false);
   const [foldEquity, setFoldEquity] = useState(30);
@@ -79,16 +72,15 @@ export function PokerCalculatorPro() {
     progressDetail
   } = useSimulationWorker();
 
-  // 是否有选中 range
   const hasRange = playerRange.size > 0;
 
-  // 底池赔率 (同步, 轻量)
+  // 底池赔率
   const potOddsResult = useMemo(() =>
     calculatePotOdds(potSize, betSize),
     [potSize, betSize]
   );
 
-  // EV 结果 (含 fold equity)
+  // EV 结果
   const evResult = useMemo(() => {
     if (!equityResult) return null;
     return calculateEVAdvanced(equityResult.win, potSize, betSize, foldEquity);
@@ -98,7 +90,6 @@ export function PokerCalculatorPro() {
   const handleRangeChange = useCallback((combos: Set<HandCombo>, str: string) => {
     setPlayerRange(combos);
     setRangeString(str);
-
     if (combos.size > 0) {
       setTimeout(() => {
         runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(combos));
@@ -106,7 +97,6 @@ export function PokerCalculatorPro() {
     }
   }, [communityCards, opponentType, opponentCount, simulations, runSimulation]);
 
-  // 更新街道
   const updateStreetByCardCount = useCallback((cardCount: number) => {
     if (cardCount === 0) setStreet('preflop');
     else if (cardCount <= 3) setStreet('flop');
@@ -114,7 +104,6 @@ export function PokerCalculatorPro() {
     else setStreet('river');
   }, []);
 
-  // 公共牌选择
   const handleCommunityCardSelect = useCallback((card: Card) => {
     setCommunityCards(prev => {
       const newCards = [...prev, card];
@@ -128,7 +117,6 @@ export function PokerCalculatorPro() {
     });
   }, [hasRange, playerRange, opponentType, opponentCount, simulations, runSimulation, updateStreetByCardCount]);
 
-  // 公共牌移除
   const handleCommunityCardRemove = useCallback((index: number) => {
     setCommunityCards(prev => {
       const newCards = prev.filter((_, i) => i !== index);
@@ -142,7 +130,6 @@ export function PokerCalculatorPro() {
     });
   }, [hasRange, playerRange, opponentType, opponentCount, simulations, runSimulation, updateStreetByCardCount]);
 
-  // 对手类型变化
   const handleOpponentTypeChange = useCallback((type: OpponentType) => {
     setOpponentType(type);
     if (hasRange) {
@@ -150,7 +137,6 @@ export function PokerCalculatorPro() {
     }
   }, [hasRange, playerRange, communityCards, opponentCount, simulations, runSimulation]);
 
-  // 对手数量变化
   const handleOpponentCountChange = useCallback((count: number) => {
     setOpponentCount(count);
     if (hasRange) {
@@ -158,7 +144,6 @@ export function PokerCalculatorPro() {
     }
   }, [hasRange, playerRange, communityCards, opponentType, simulations, runSimulation]);
 
-  // 街道切换
   const handleStreetChange = useCallback((s: Street) => {
     setStreet(s);
     const cardCounts: Record<Street, number> = { preflop: 0, flop: 3, turn: 4, river: 5 };
@@ -172,9 +157,6 @@ export function PokerCalculatorPro() {
     return 0;
   };
 
-  // ============================================
-  // Equity 颜色
-  // ============================================
   const getEquityColor = (equity: number) => {
     if (equity >= 60) return 'text-emerald-400';
     if (equity >= 50) return 'text-lime-400';
@@ -183,9 +165,6 @@ export function PokerCalculatorPro() {
     return 'text-red-400';
   };
 
-  // ============================================
-  // 对手预设 (Phase 3: 水平 pill 滚动条)
-  // ============================================
   const OPPONENT_PILLS: { type: OpponentType; label: string; emoji: string }[] = [
     { type: 'random', label: '随机', emoji: '🎲' },
     { type: 'tight', label: 'TAG', emoji: '🎯' },
@@ -199,8 +178,8 @@ export function PokerCalculatorPro() {
   // 渲染
   // ============================================
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 pb-20 lg:pb-0">
-      {/* 顶部标题栏 — 紧凑 */}
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
+      {/* 顶部标题栏 */}
       <header className="bg-gray-900/80 border-b border-gray-700 sticky top-0 z-50 backdrop-blur-sm">
         <div className="max-w-7xl mx-auto px-3 py-2.5">
           <div className="flex items-center justify-between">
@@ -213,7 +192,7 @@ export function PokerCalculatorPro() {
                   德州扑克 Pro
                 </h1>
                 <p className="text-gray-500 text-[10px] hidden sm:block">
-                  Range vs Range · Phase 2 Pro Analysis
+                  Range vs Range · Structured Equity Analysis
                 </p>
               </div>
             </div>
@@ -254,12 +233,11 @@ export function PokerCalculatorPro() {
 
       <main className="max-w-7xl mx-auto px-3 py-3 lg:py-6">
         <div className="grid lg:grid-cols-3 gap-3 lg:gap-6">
-          {/* 左侧：输入区 */}
+          {/* ========== 左侧/移动端上方：输入区 ========== */}
           <div className="lg:col-span-1 space-y-3">
 
-            {/* ========== Phase 3: 可折叠 Range 编辑器 ========== */}
+            {/* Range 编辑器 */}
             <div className="bg-gray-800/50 rounded-2xl backdrop-blur-sm border border-gray-700 overflow-hidden">
-              {/* 折叠头部 — 始终可见 */}
               <button
                 onClick={() => setRangeExpanded(!rangeExpanded)}
                 className="w-full flex items-center justify-between px-4 py-3 min-h-[48px]"
@@ -285,7 +263,6 @@ export function PokerCalculatorPro() {
                 </div>
               </button>
 
-              {/* Range 矩阵 — 可折叠 */}
               {rangeExpanded && (
                 <div className="px-2 pb-3 animate-in slide-in-from-top-2 duration-200">
                   <RangeMatrix
@@ -296,7 +273,6 @@ export function PokerCalculatorPro() {
                 </div>
               )}
 
-              {/* 收起时的快速 Range 预设 */}
               {!rangeExpanded && (
                 <div className="px-3 pb-3 flex gap-1.5 overflow-x-auto no-scrollbar">
                   {[
@@ -311,7 +287,7 @@ export function PokerCalculatorPro() {
                         const combos = new Set<HandCombo>(preset.combos);
                         handleRangeChange(combos, preset.combos.join(', '));
                       }}
-                      className="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-700/60 text-gray-300 hover:bg-emerald-500/20 hover:text-emerald-400 transition-colors whitespace-nowrap min-h-[32px]"
+                      className="flex-shrink-0 px-3 py-2 rounded-xl text-xs font-medium bg-gray-700/60 text-gray-300 hover:bg-emerald-500/20 hover:text-emerald-400 transition-colors whitespace-nowrap min-h-[40px]"
                     >
                       {preset.label}
                     </button>
@@ -320,7 +296,7 @@ export function PokerCalculatorPro() {
               )}
             </div>
 
-            {/* ========== 街道 + 公共牌 ========== */}
+            {/* 街道 + 公共牌 */}
             <div className="bg-gray-800/50 rounded-2xl p-3 backdrop-blur-sm border border-gray-700">
               <div className="flex gap-1.5 mb-2">
                 {([
@@ -334,7 +310,7 @@ export function PokerCalculatorPro() {
                     onClick={() => handleStreetChange(s.id)}
                     disabled={isSimulating}
                     className={`
-                      flex-1 py-2 rounded-xl text-center transition-all text-xs font-medium min-h-[40px]
+                      flex-1 py-2 rounded-xl text-center transition-all text-xs font-medium min-h-[44px]
                       ${street === s.id
                         ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg'
                         : 'bg-gray-700/50 text-gray-400 hover:bg-gray-700'
@@ -358,22 +334,22 @@ export function PokerCalculatorPro() {
               )}
             </div>
 
-            {/* ========== Phase 3: 对手预设 pill 滚动条 ========== */}
+            {/* 对手预设 + 对手数量 */}
             <div className="bg-gray-800/50 rounded-2xl p-3 backdrop-blur-sm border border-gray-700">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-white text-sm font-semibold flex items-center gap-1.5">
                   <Users className="w-4 h-4 text-purple-400" />
                   对手
                 </h3>
-                {/* 移动端对手数量 */}
-                <div className="lg:hidden flex gap-1">
+                {/* 对手数量 */}
+                <div className="flex gap-1">
                   {[1, 2, 3].map(n => (
                     <button
                       key={n}
                       onClick={() => handleOpponentCountChange(n)}
                       disabled={isSimulating}
                       className={`
-                        w-7 h-7 rounded-lg text-xs font-medium transition-all
+                        w-8 h-8 rounded-lg text-xs font-medium transition-all
                         ${opponentCount === n
                           ? 'bg-emerald-500 text-white'
                           : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
@@ -387,7 +363,6 @@ export function PokerCalculatorPro() {
                 </div>
               </div>
 
-              {/* 水平 pill 滚动 */}
               <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
                 {OPPONENT_PILLS.map(pill => (
                   <button
@@ -395,8 +370,8 @@ export function PokerCalculatorPro() {
                     onClick={() => handleOpponentTypeChange(pill.type)}
                     disabled={isSimulating}
                     className={`
-                      flex-shrink-0 flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium
-                      transition-all min-h-[40px] whitespace-nowrap
+                      flex-shrink-0 flex items-center gap-1 px-3 py-2.5 rounded-xl text-xs font-medium
+                      transition-all min-h-[44px] whitespace-nowrap
                       ${opponentType === pill.type
                         ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg shadow-purple-500/20'
                         : 'bg-gray-700/60 text-gray-300 hover:bg-gray-600/60'
@@ -411,11 +386,11 @@ export function PokerCalculatorPro() {
               </div>
             </div>
 
-            {/* ========== 筹码设置 (可折叠) ========== */}
+            {/* 筹码设置 (可折叠) */}
             <div className="bg-gray-800/50 rounded-2xl backdrop-blur-sm border border-gray-700 overflow-hidden">
               <button
                 onClick={() => setSettingsExpanded(!settingsExpanded)}
-                className="w-full flex items-center justify-between px-4 py-3 min-h-[44px]"
+                className="w-full flex items-center justify-between px-4 py-3 min-h-[48px]"
               >
                 <div className="flex items-center gap-2">
                   <SlidersHorizontal className="w-4 h-4 text-yellow-400" />
@@ -443,16 +418,17 @@ export function PokerCalculatorPro() {
                         <label className="text-gray-400 text-[10px]">{item.label}</label>
                         <input
                           type="number"
+                          inputMode="numeric"
                           value={item.value}
                           onChange={(e) => item.setter(Number(e.target.value))}
-                          className="w-full bg-gray-700 text-white rounded-lg px-2 py-2 text-sm mt-0.5 min-h-[40px] text-base"
+                          className="w-full bg-gray-700 text-white rounded-lg px-2 py-2.5 text-sm mt-0.5 min-h-[44px] text-base"
                         />
                       </div>
                     ))}
                   </div>
 
-                  {/* 移动端模拟次数 */}
-                  <div className="lg:hidden mt-2 pt-2 border-t border-gray-700/50">
+                  {/* 模拟次数 */}
+                  <div className="mt-2 pt-2 border-t border-gray-700/50">
                     <div className="flex items-center justify-between">
                       <span className="text-gray-400 text-xs">模拟次数</span>
                       <div className="flex gap-1">
@@ -461,7 +437,7 @@ export function PokerCalculatorPro() {
                             key={n}
                             onClick={() => setSimulations(n)}
                             disabled={isSimulating}
-                            className={`px-2 py-1 rounded text-[10px] font-medium
+                            className={`px-2.5 py-1.5 rounded-lg text-xs font-medium min-h-[32px]
                               ${simulations === n ? 'bg-emerald-500 text-white' : 'bg-gray-700 text-gray-400'}
                               disabled:opacity-50`}
                           >
@@ -476,18 +452,18 @@ export function PokerCalculatorPro() {
             </div>
           </div>
 
-          {/* ========== 桌面端右侧：结果区 ========== */}
-          <div className="hidden lg:block lg:col-span-2">
-            <div className="bg-gray-800/50 rounded-2xl p-6 backdrop-blur-sm border border-gray-700">
+          {/* ========== 右侧/移动端下方：结果区（内联，所有视口都可见） ========== */}
+          <div className="lg:col-span-2">
+            <div className="bg-gray-800/50 rounded-2xl p-4 lg:p-6 backdrop-blur-sm border border-gray-700">
               {!hasRange ? (
-                <div className="text-center py-12 text-gray-400">
+                <div className="text-center py-10 text-gray-400">
                   <Target className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                  <p>请在左侧选择你的 Range</p>
+                  <p className="text-sm font-medium">请选择你的 Range</p>
                   <p className="text-xs mt-1 text-gray-500">点击矩阵 cell 或使用快捷预设</p>
                 </div>
               ) : isSimulating ? (
-                <div className="text-center py-12">
-                  <div className="relative w-32 h-32 mx-auto mb-4">
+                <div className="text-center py-8">
+                  <div className="relative w-24 h-24 lg:w-32 lg:h-32 mx-auto mb-4">
                     <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
                       <circle cx="50" cy="50" r="45" fill="none" stroke="#374151" strokeWidth="8" />
                       <circle
@@ -504,17 +480,17 @@ export function PokerCalculatorPro() {
                       </defs>
                     </svg>
                     <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-2xl font-bold text-white">{Math.round(progress)}%</span>
+                      <span className="text-xl lg:text-2xl font-bold text-white">{Math.round(progress)}%</span>
                     </div>
                   </div>
                   <p className="text-gray-400 text-sm mb-2">
-                    Range vs Range 模拟 {simulations.toLocaleString()} 次...
+                    Range vs Range · {simulations.toLocaleString()} 次模拟
                   </p>
                   <p className="text-emerald-400 text-xs mb-3 flex items-center justify-center gap-1">
                     <Zap className="w-3 h-3" /> Web Worker 后台计算
                   </p>
                   {progressDetail && (
-                    <div className="flex justify-center gap-6 text-sm mb-3">
+                    <div className="flex justify-center gap-4 text-sm mb-3">
                       <span className="text-emerald-400">胜: {progressDetail.wins}</span>
                       <span className="text-yellow-400">平: {progressDetail.ties}</span>
                       <span className="text-red-400">负: {progressDetail.losses}</span>
@@ -522,18 +498,18 @@ export function PokerCalculatorPro() {
                   )}
                   <button
                     onClick={cancelSimulation}
-                    className="px-4 py-2 bg-red-500/20 text-red-400 rounded-lg text-sm hover:bg-red-500/30 flex items-center gap-2 mx-auto"
+                    className="px-4 py-2.5 bg-red-500/20 text-red-400 rounded-xl text-sm hover:bg-red-500/30 flex items-center gap-2 mx-auto min-h-[44px]"
                   >
                     <RotateCcw className="w-4 h-4" /> 取消
                   </button>
                 </div>
               ) : error ? (
-                <div className="text-center py-12">
+                <div className="text-center py-10">
                   <AlertCircle className="w-12 h-12 mx-auto mb-3 text-red-400" />
                   <p className="text-red-400 mb-4">{error}</p>
                   <button
                     onClick={() => runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange))}
-                    className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm hover:bg-emerald-600 flex items-center gap-2 mx-auto"
+                    className="px-4 py-2.5 bg-emerald-500 text-white rounded-xl text-sm hover:bg-emerald-600 flex items-center gap-2 mx-auto min-h-[44px]"
                   >
                     <RotateCcw className="w-4 h-4" /> 重试
                   </button>
@@ -545,6 +521,8 @@ export function PokerCalculatorPro() {
                   equityLose={equityResult.lose}
                   simulations={equityResult.simulations}
                   rangeString={rangeString}
+                  equityByCombo={equityResult.equityByCombo}
+                  equityHistogram={equityResult.equityHistogram}
                   outsResult={outsResult}
                   potOddsResult={potOddsResult}
                   evResult={evResult}
@@ -559,10 +537,10 @@ export function PokerCalculatorPro() {
               ) : null}
             </div>
 
-            {/* Equity Chart (桌面端 RvR) */}
+            {/* Equity Chart (per combo) */}
             {equityResult?.equityByCombo && Object.keys(equityResult.equityByCombo).length > 0 && (
-              <Suspense fallback={<div className="h-40 bg-gray-800/50 rounded-2xl mt-4 animate-pulse" />}>
-                <div className="mt-4">
+              <Suspense fallback={<div className="h-40 bg-gray-800/50 rounded-2xl mt-3 animate-pulse" />}>
+                <div className="mt-3">
                   <EquityChart equityByCombo={equityResult.equityByCombo} />
                 </div>
               </Suspense>
@@ -571,131 +549,12 @@ export function PokerCalculatorPro() {
         </div>
       </main>
 
-      {/* ========== Phase 3: 移动端底部悬浮栏 + Drawer ========== */}
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 z-40">
-        <Drawer>
-          <DrawerTrigger asChild>
-            <button
-              className="w-full bg-gray-900/95 backdrop-blur-lg border-t border-gray-700 px-4 py-3 flex items-center justify-between pb-[max(0.75rem,env(safe-area-inset-bottom))]"
-              disabled={!hasRange}
-            >
-              <div className="flex items-center gap-2">
-                {hasRange ? (
-                  <span className="text-emerald-400 text-xs font-mono">{playerRange.size} combos</span>
-                ) : (
-                  <span className="text-gray-400 text-xs">请选择 Range</span>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2">
-                {isSimulating ? (
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-                    <span className="text-gray-400 text-xs">{Math.round(progress)}%</span>
-                  </div>
-                ) : equityResult ? (
-                  <div className="flex items-center gap-2">
-                    <div className="text-center">
-                      <div className={`text-base font-bold ${getEquityColor(equityResult.win)}`}>
-                        {equityResult.win.toFixed(0)}%
-                      </div>
-                      <div className="text-gray-600 text-[9px]">胜</div>
-                    </div>
-                    <div className="text-gray-700">|</div>
-                    <div className="text-center">
-                      <div className="text-base font-bold text-yellow-400">
-                        {equityResult.tie.toFixed(0)}%
-                      </div>
-                      <div className="text-gray-600 text-[9px]">平</div>
-                    </div>
-                    <div className="text-gray-700">|</div>
-                    <div className="text-center">
-                      <div className="text-base font-bold text-red-400">
-                        {equityResult.lose.toFixed(0)}%
-                      </div>
-                      <div className="text-gray-600 text-[9px]">负</div>
-                    </div>
-                    {evResult && (
-                      <>
-                        <div className="text-gray-700">|</div>
-                        <div className={`text-xs font-bold ${evResult.isPositiveEV ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {evResult.totalEV > 0 ? '+' : ''}{evResult.totalEV.toFixed(0)} EV
-                        </div>
-                      </>
-                    )}
-                  </div>
-                ) : (
-                  <span className="text-gray-500 text-xs">等待计算</span>
-                )}
-                <ChevronUp className="w-4 h-4 text-gray-400 ml-1" />
-              </div>
-            </button>
-          </DrawerTrigger>
-
-          <DrawerContent className="bg-gray-900/98 backdrop-blur-lg border-t border-gray-700 max-h-[85vh]">
-            <DrawerTitle className="sr-only">分析详情</DrawerTitle>
-            <div className="overflow-y-auto max-h-[80vh] p-4">
-              {isSimulating ? (
-                <div className="text-center py-8">
-                  <div className="relative w-24 h-24 mx-auto mb-4">
-                    <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
-                      <circle cx="50" cy="50" r="45" fill="none" stroke="#374151" strokeWidth="8" />
-                      <circle
-                        cx="50" cy="50" r="45" fill="none" stroke="url(#progressGradMobile)"
-                        strokeWidth="8" strokeLinecap="round"
-                        strokeDasharray={`${progress * 2.83} 283`}
-                        className="transition-all duration-300"
-                      />
-                      <defs>
-                        <linearGradient id="progressGradMobile" x1="0%" y1="0%" x2="100%" y2="0%">
-                          <stop offset="0%" stopColor="#10b981" />
-                          <stop offset="100%" stopColor="#14b8a6" />
-                        </linearGradient>
-                      </defs>
-                    </svg>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-xl font-bold text-white">{Math.round(progress)}%</span>
-                    </div>
-                  </div>
-                  <p className="text-gray-400 text-sm mb-2">模拟计算中...</p>
-                  <button
-                    onClick={cancelSimulation}
-                    className="px-4 py-2 bg-red-500/20 text-red-400 rounded-lg text-sm hover:bg-red-500/30 flex items-center gap-2 mx-auto"
-                  >
-                    <RotateCcw className="w-4 h-4" /> 取消
-                  </button>
-                </div>
-              ) : equityResult ? (
-                <AnalysisTabs
-                  equityWin={equityResult.win}
-                  equityTie={equityResult.tie}
-                  equityLose={equityResult.lose}
-                  simulations={equityResult.simulations}
-                  rangeString={rangeString}
-                  outsResult={outsResult}
-                  potOddsResult={potOddsResult}
-                  evResult={evResult}
-                  blockerResult={blockerResult}
-                  streetEquity={streetEquity}
-                  nutResult={nutResult}
-                  foldEquity={foldEquity}
-                  onFoldEquityChange={setFoldEquity}
-                  potSize={potSize}
-                  betSize={betSize}
-                  compact
-                />
-              ) : null}
-            </div>
-          </DrawerContent>
-        </Drawer>
-      </div>
-
-      {/* 桌面端底部说明 */}
-      <footer className="hidden lg:block max-w-7xl mx-auto px-4 py-4 text-center text-gray-500 text-xs space-y-0.5">
+      {/* 底部说明 */}
+      <footer className="max-w-7xl mx-auto px-4 py-4 text-center text-gray-500 text-xs space-y-0.5">
         <p className="flex items-center justify-center gap-1">
-          <Zap className="w-3 h-3" /> Phase 2 Pro · Outs · Nuts · Blockers · EV + Fold Equity
+          <Zap className="w-3 h-3" /> Range vs Range · Structured Equity · Histogram
         </p>
-        <p>Range vs Range · Web Worker · 100K sims · Mobile-First</p>
+        <p>Web Worker · 100K sims · Mobile-First</p>
       </footer>
     </div>
   );

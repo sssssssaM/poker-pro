@@ -6,6 +6,7 @@ import { Card, OpponentType, EquityResult, HandRank, HandCombo } from '@/lib/pok
 // 扩展 EquityResult 以支持 RvR 图表
 export interface ExtendedEquityResult extends EquityResult {
   equityByCombo?: Record<HandCombo, { wins: number; total: number; equity: number }>;
+  equityHistogram?: { rangeStart: number; rangeEnd: number; count: number }[];
 }
 
 interface ProgressUpdate {
@@ -27,6 +28,7 @@ interface SimulationComplete {
   handRank?: HandRank;
   outs?: number;
   equityByCombo?: Record<HandCombo, { wins: number; total: number; equity: number }>;
+  equityHistogram?: { rangeStart: number; rangeEnd: number; count: number }[];
 }
 
 type WorkerResponse = ProgressUpdate | SimulationComplete;
@@ -118,7 +120,8 @@ export function useSimulationWorker(): UseSimulationWorkerReturn {
             confidence: data.confidence,
             handRank: data.handRank,
             outs: data.outs,
-            equityByCombo: data.equityByCombo
+            equityByCombo: data.equityByCombo,
+            equityHistogram: data.equityHistogram
           });
           setIsSimulating(false);
           setProgress(100);

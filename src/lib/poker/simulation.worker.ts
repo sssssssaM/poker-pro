@@ -265,7 +265,8 @@ function comboToCards(combo: HandCombo, deck: Card[]): Card[] {
 // Worker 消息类型
 interface SimulationRequest {
   type: 'simulate';
-  playerHand: Card[];
+  playerHand: Card[] | null;
+  playerRange?: HandCombo[];
   communityCards: Card[];
   opponentType: OpponentType;
   opponentCount: number;
@@ -278,6 +279,19 @@ interface ProgressUpdate {
   currentWins: number;
   currentTies: number;
   currentLosses: number;
+  currentSimulations: number;
+}
+
+interface ComboEquityData {
+  wins: number;
+  total: number;
+  equity: number;
+}
+
+interface HistogramBucket {
+  rangeStart: number;
+  rangeEnd: number;
+  count: number;
 }
 
 interface SimulationResult {
@@ -289,6 +303,8 @@ interface SimulationResult {
   confidence: number;
   handRank?: HandRank;
   outs?: number;
+  equityByCombo?: Record<HandCombo, ComboEquityData>;
+  equityHistogram?: HistogramBucket[];
 }
 
 type WorkerMessage = SimulationRequest;
@@ -296,123 +312,244 @@ type WorkerResponse = ProgressUpdate | SimulationResult;
 
 // 主模拟函数（带进度报告）
 function runSimulation(request: SimulationRequest): void {
-  const { playerHand, communityCards, opponentType, opponentCount, simulations } = request;
+  const { playerHand, playerRange, communityCards, opponentType, opponentCount, simulations } = request;
 
+  // 判断是否使用 Range 模式
+  const isRangeMode = playerRange && playerRange.length > 0;
+
+  if (isRangeMode) {
+    runRangeSimulation(playerRange!, communityCards, opponentType, opponentCount, simulations);
+  } else if (playerHand && playerHand.length === 2) {
+    runSingleHandSimulation(playerHand, communityCards, opponentType, opponentCount, simulations);
+  }
+}
+
+// Range vs Range 模拟
+function runRangeSimulation(
+  playerRange: HandCombo[],
+  communityCards: Card[],
+  opponentType: OpponentType,
+  opponentCount: number,
+  simulations: number
+): void {
+  let totalWins = 0;
+  let totalTies = 0;
+  let totalLosses = 0;
+  let totalValid = 0;
+
+  // Per-combo 追踪
+  const comboStats: Record<string, { wins: number; ties: number; total: number }> = {};
+  for (const combo of playerRange) {
+    comboStats[combo] = { wins: 0, ties: 0, total: 0 };
+  }
+
+  const opponentRange = OPPONENT_RANGES[opponentType];
+  const useOppRange = opponentType !== 'random' && opponentRange.length > 0;
+
+  // 每个 combo 分配的模拟次数
+  const simsPerCombo = Math.max(100, Math.floor(simulations / playerRange.length));
+  const progressInterval = Math.max(1, Math.floor(playerRange.length / 20));
+
+  for (let ci = 0; ci < playerRange.length; ci++) {
+    const combo = playerRange[ci];
+    let comboWins = 0;
+    let comboTies = 0;
+    let comboLosses = 0;
+    let comboValid = 0;
+    let skips = 0;
+    const maxSkips = simsPerCombo * 2;
+
+    while (comboValid < simsPerCombo && skips < maxSkips) {
+      let deck = createDeck();
+      deck = shuffleDeck(deck);
+      deck = removeCards(deck, communityCards);
+
+      // 为 hero 发牌
+      const heroCards = comboToCards(combo, deck);
+      if (heroCards.length !== 2) { skips++; continue; }
+      deck = removeCards(deck, heroCards);
+
+      // 为对手发牌
+      const opponentHands: Card[][] = [];
+      let validOpp = true;
+      for (let j = 0; j < opponentCount; j++) {
+        let oppCards: Card[];
+        if (useOppRange) {
+          const availableCombos = getAvailableCombos(opponentRange, deck);
+          if (availableCombos.length === 0) { validOpp = false; skips++; break; }
+          const rc = availableCombos[Math.floor(Math.random() * availableCombos.length)];
+          oppCards = comboToCards(rc, deck);
+        } else {
+          oppCards = [deck[0], deck[1]];
+        }
+        if (oppCards.length !== 2) { validOpp = false; skips++; break; }
+        opponentHands.push(oppCards);
+        deck = removeCards(deck, oppCards);
+      }
+      if (!validOpp) continue;
+
+      // 发完公共牌
+      const remaining = 5 - communityCards.length;
+      const runOut = deck.slice(0, remaining);
+      const finalBoard = [...communityCards, ...runOut];
+
+      const heroResult = evaluateHand(heroCards, finalBoard);
+      const oppResults = opponentHands.map(h => evaluateHand(h, finalBoard));
+      const bestOpp = Math.max(...oppResults.map(r => r.value));
+
+      if (heroResult.value > bestOpp) comboWins++;
+      else if (heroResult.value === bestOpp) comboTies++;
+      else comboLosses++;
+
+      comboValid++;
+    }
+
+    comboStats[combo].wins = comboWins;
+    comboStats[combo].ties = comboTies;
+    comboStats[combo].total = comboValid;
+    totalWins += comboWins;
+    totalTies += comboTies;
+    totalLosses += comboLosses;
+    totalValid += comboValid;
+
+    // 进度报告
+    if ((ci + 1) % progressInterval === 0 || ci === playerRange.length - 1) {
+      self.postMessage({
+        type: 'progress',
+        progress: ((ci + 1) / playerRange.length) * 100,
+        currentWins: totalWins,
+        currentTies: totalTies,
+        currentLosses: totalLosses,
+        currentSimulations: totalValid
+      } as ProgressUpdate);
+    }
+  }
+
+  // 构建 equityByCombo
+  const equityByCombo: Record<HandCombo, ComboEquityData> = {} as any;
+  for (const combo of playerRange) {
+    const s = comboStats[combo];
+    equityByCombo[combo] = {
+      wins: s.wins,
+      total: s.total,
+      equity: s.total > 0 ? (s.wins / s.total) * 100 : 0
+    };
+  }
+
+  // 构建 equity 直方图 (10 桶)
+  const histogram: HistogramBucket[] = [];
+  for (let i = 0; i < 10; i++) {
+    histogram.push({ rangeStart: i * 10, rangeEnd: (i + 1) * 10, count: 0 });
+  }
+  for (const combo of playerRange) {
+    const eq = equityByCombo[combo].equity;
+    const bucket = Math.min(9, Math.floor(eq / 10));
+    histogram[bucket].count++;
+  }
+
+  const confidence = totalValid > 0
+    ? 1.96 * Math.sqrt((totalWins / totalValid * (1 - totalWins / totalValid)) / totalValid) * 100
+    : 0;
+
+  self.postMessage({
+    type: 'complete',
+    win: totalValid > 0 ? (totalWins / totalValid) * 100 : 0,
+    tie: totalValid > 0 ? (totalTies / totalValid) * 100 : 0,
+    lose: totalValid > 0 ? (totalLosses / totalValid) * 100 : 0,
+    simulations: totalValid,
+    confidence: Math.round((1 - confidence / 100) * 1000) / 10,
+    equityByCombo,
+    equityHistogram: histogram
+  } as SimulationResult);
+}
+
+// 单手牌模拟 (原有逻辑)
+function runSingleHandSimulation(
+  playerHand: Card[],
+  communityCards: Card[],
+  opponentType: OpponentType,
+  opponentCount: number,
+  simulations: number
+): void {
   let wins = 0;
   let ties = 0;
   let losses = 0;
   let validSimulations = 0;
   let skippedSimulations = 0;
-  const maxSkips = simulations * 2; // 最大跳过次数，防止无限循环
+  const maxSkips = simulations * 2;
 
   const opponentRange = OPPONENT_RANGES[opponentType];
   const useRange = opponentType !== 'random' && opponentRange.length > 0;
 
-  // 进度报告间隔
   const progressInterval = Math.max(1000, Math.floor(simulations / 20));
   let lastProgressReport = 0;
 
-  // 获取当前牌力
   let currentHandRank: HandRank | undefined;
   if (communityCards.length >= 3) {
     const result = evaluateHand(playerHand, communityCards);
     currentHandRank = result.rank;
   }
 
-  // 计算 Outs（精确版）
   let outs: number | undefined;
   if (communityCards.length >= 3 && communityCards.length < 5) {
     outs = calculatePreciseOuts(playerHand, communityCards, opponentType, opponentCount);
   }
 
   while (validSimulations < simulations && skippedSimulations < maxSkips) {
-    // 创建并洗牌
     let deck = createDeck();
     deck = shuffleDeck(deck);
-
-    // 移除已知牌
     deck = removeCards(deck, [...playerHand, ...communityCards]);
 
-    // 为对手发牌
     const opponentHands: Card[][] = [];
     let validOpponents = true;
 
     for (let j = 0; j < opponentCount; j++) {
       let oppCards: Card[];
-
       if (useRange) {
-        // 获取当前可用范围内的组合
         const availableCombos = getAvailableCombos(opponentRange, deck);
-
-        if (availableCombos.length === 0) {
-          // 没有可用的组合，跳过这次模拟（不降级为随机）
-          validOpponents = false;
-          skippedSimulations++;
-          break;
-        }
-
-        // 从可用组合中随机选择
+        if (availableCombos.length === 0) { validOpponents = false; skippedSimulations++; break; }
         const randomCombo = availableCombos[Math.floor(Math.random() * availableCombos.length)];
         oppCards = comboToCards(randomCombo, deck);
       } else {
-        // 随机发牌
         oppCards = [deck[0], deck[1]];
       }
-
-      if (oppCards.length !== 2) {
-        validOpponents = false;
-        skippedSimulations++;
-        break;
-      }
-
+      if (oppCards.length !== 2) { validOpponents = false; skippedSimulations++; break; }
       opponentHands.push(oppCards);
       deck = removeCards(deck, oppCards);
     }
 
     if (!validOpponents) continue;
 
-    // 发完公共牌
     const remainingCommunity = 5 - communityCards.length;
     const runOut = deck.slice(0, remainingCommunity);
     const finalCommunity = [...communityCards, ...runOut];
 
-    // 评估所有手牌
     const playerResult = evaluateHand(playerHand, finalCommunity);
     const opponentResults = opponentHands.map(h => evaluateHand(h, finalCommunity));
-
-    // 比较结果
     const bestOpponent = Math.max(...opponentResults.map(r => r.value));
 
-    if (playerResult.value > bestOpponent) {
-      wins++;
-    } else if (playerResult.value === bestOpponent) {
-      ties++;
-    } else {
-      losses++;
-    }
+    if (playerResult.value > bestOpponent) wins++;
+    else if (playerResult.value === bestOpponent) ties++;
+    else losses++;
 
     validSimulations++;
 
-    // 进度报告
     if (validSimulations - lastProgressReport >= progressInterval) {
       lastProgressReport = validSimulations;
-      const progress = (validSimulations / simulations) * 100;
-
       self.postMessage({
         type: 'progress',
-        progress,
+        progress: (validSimulations / simulations) * 100,
         currentWins: wins,
         currentTies: ties,
-        currentLosses: losses
+        currentLosses: losses,
+        currentSimulations: validSimulations
       } as ProgressUpdate);
     }
   }
 
-  // 计算置信度
   const confidence = 1.96 * Math.sqrt((wins / validSimulations * (1 - wins / validSimulations)) / validSimulations) * 100;
 
-  // 返回结果
-  const result: SimulationResult = {
+  self.postMessage({
     type: 'complete',
     win: (wins / validSimulations) * 100,
     tie: (ties / validSimulations) * 100,
@@ -421,9 +558,7 @@ function runSimulation(request: SimulationRequest): void {
     confidence: Math.round((1 - confidence / 100) * 1000) / 10,
     handRank: currentHandRank,
     outs
-  };
-
-  self.postMessage(result);
+  } as SimulationResult);
 }
 
 // 精确计算 Outs（通过蒙特卡洛采样）
@@ -537,4 +672,4 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
   }
 };
 
-export {};
+export { };
