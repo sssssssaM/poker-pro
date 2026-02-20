@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useMemo, lazy, Suspense } from 'react';
+import { Drawer } from 'vaul';
 import {
   Calculator,
   Users,
@@ -11,7 +12,9 @@ import {
   RotateCcw,
   AlertCircle,
   LayoutGrid,
-  SlidersHorizontal
+  SlidersHorizontal,
+  X,
+  TrendingUp
 } from 'lucide-react';
 import { Card, Street, OpponentType, HandCombo } from '@/lib/poker/pro-types';
 import { RangeMatrix, CommunityCardMatrix } from './HandMatrix';
@@ -28,6 +31,31 @@ const loadStreetEquity = () => import('@/lib/poker/street-equity');
 
 // Lazy load 图表
 const EquityChart = lazy(() => import('./EquityChart').then(m => ({ default: m.EquityChart })));
+
+// ============================================
+// Range Presets
+// ============================================
+const RANGE_PRESETS = [
+  { key: 'top5', label: 'Top 5%', combos: ['AA', 'KK', 'QQ', 'JJ', 'TT', 'AKs', 'AQs', 'AKo'] },
+  { key: 'top10', label: 'Top 10%', combos: ['AA', 'KK', 'QQ', 'JJ', 'TT', '99', 'AKs', 'AQs', 'AJs', 'ATs', 'AKo', 'AQo', 'KQs'] },
+  { key: 'top20', label: 'Top 20%', combos: ['AA', 'KK', 'QQ', 'JJ', 'TT', '99', '88', '77', 'AKs', 'AQs', 'AJs', 'ATs', 'A9s', 'A8s', 'A5s', 'A4s', 'KQs', 'KJs', 'KTs', 'QJs', 'QTs', 'JTs', 'AKo', 'AQo', 'AJo', 'ATo', 'KQo', 'KJo'] },
+  { key: 'pairs', label: '对子', combos: ['AA', 'KK', 'QQ', 'JJ', 'TT', '99', '88', '77', '66', '55', '44', '33', '22'] },
+];
+
+const OPPONENT_PILLS: { type: OpponentType; label: string; emoji: string }[] = [
+  { type: 'random', label: '随机', emoji: '🎲' },
+  { type: 'tight', label: 'TAG', emoji: '🎯' },
+  { type: 'loose', label: 'LAG', emoji: '🔥' },
+  { type: 'passive', label: '松被动', emoji: '🐢' },
+  { type: 'nit', label: 'Nit', emoji: '🔒' },
+];
+
+const STREETS = [
+  { id: 'preflop' as Street, label: '翻前' },
+  { id: 'flop' as Street, label: '翻牌' },
+  { id: 'turn' as Street, label: '转牌' },
+  { id: 'river' as Street, label: '河牌' },
+];
 
 export function PokerCalculatorPro() {
   // ====== Range 状态 ======
@@ -51,8 +79,8 @@ export function PokerCalculatorPro() {
   const [simulations, setSimulations] = useState(100000);
 
   // ====== UI 状态 ======
-  const [rangeExpanded, setRangeExpanded] = useState(false);
-  const [settingsExpanded, setSettingsExpanded] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [foldEquity, setFoldEquity] = useState(30);
 
   // ====== Phase 2 分析结果 ======
@@ -157,405 +185,421 @@ export function PokerCalculatorPro() {
     return 0;
   };
 
-  const getEquityColor = (equity: number) => {
-    if (equity >= 60) return 'text-emerald-400';
-    if (equity >= 50) return 'text-lime-400';
-    if (equity >= 40) return 'text-yellow-400';
-    if (equity >= 30) return 'text-orange-400';
-    return 'text-red-400';
+  // ============================================
+  // Shared Analysis Component
+  // ============================================
+  const renderAnalysis = () => {
+    if (!hasRange) return (
+      <div className="text-center py-10 text-gray-400">
+        <Target className="w-10 h-10 mx-auto mb-3 opacity-40" />
+        <p className="text-sm">选择 Range 开始分析</p>
+      </div>
+    );
+    if (isSimulating) return (
+      <div className="text-center py-6">
+        <div className="relative w-20 h-20 mx-auto mb-3">
+          <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="45" fill="none" stroke="#1f2937" strokeWidth="6" />
+            <circle cx="50" cy="50" r="45" fill="none" stroke="#10b981"
+              strokeWidth="6" strokeLinecap="round"
+              strokeDasharray={`${progress * 2.83} 283`}
+              className="transition-all duration-300"
+            />
+          </svg>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-lg font-bold text-white">{Math.round(progress)}%</span>
+          </div>
+        </div>
+        {progressDetail && (
+          <div className="flex justify-center gap-3 text-xs mb-2">
+            <span className="text-emerald-400">胜 {progressDetail.wins}</span>
+            <span className="text-yellow-400">平 {progressDetail.ties}</span>
+            <span className="text-red-400">负 {progressDetail.losses}</span>
+          </div>
+        )}
+        <button onClick={cancelSimulation}
+          className="px-3 py-1.5 bg-red-500/20 text-red-400 rounded-lg text-xs hover:bg-red-500/30 mx-auto flex items-center gap-1">
+          <RotateCcw className="w-3 h-3" /> 取消
+        </button>
+      </div>
+    );
+    if (error) return (
+      <div className="text-center py-8">
+        <AlertCircle className="w-10 h-10 mx-auto mb-2 text-red-400" />
+        <p className="text-red-400 text-sm mb-3">{error}</p>
+        <button onClick={() => runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange))}
+          className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs mx-auto flex items-center gap-1">
+          <RotateCcw className="w-3 h-3" /> 重试
+        </button>
+      </div>
+    );
+    if (equityResult) return (
+      <>
+        <AnalysisTabs
+          equityWin={equityResult.win}
+          equityTie={equityResult.tie}
+          equityLose={equityResult.lose}
+          simulations={equityResult.simulations}
+          rangeString={rangeString}
+          equityByCombo={equityResult.equityByCombo}
+          equityHistogram={equityResult.equityHistogram}
+          outsResult={outsResult}
+          potOddsResult={potOddsResult}
+          evResult={evResult}
+          blockerResult={blockerResult}
+          streetEquity={streetEquity}
+          nutResult={nutResult}
+          foldEquity={foldEquity}
+          onFoldEquityChange={setFoldEquity}
+          potSize={potSize}
+          betSize={betSize}
+        />
+        {equityResult.equityByCombo && Object.keys(equityResult.equityByCombo).length > 0 && (
+          <Suspense fallback={<div className="h-32 bg-gray-800/30 rounded-xl mt-3 animate-pulse" />}>
+            <div className="mt-3">
+              <EquityChart equityByCombo={equityResult.equityByCombo} />
+            </div>
+          </Suspense>
+        )}
+      </>
+    );
+    return null;
   };
-
-  const OPPONENT_PILLS: { type: OpponentType; label: string; emoji: string }[] = [
-    { type: 'random', label: '随机', emoji: '🎲' },
-    { type: 'tight', label: 'TAG', emoji: '🎯' },
-    { type: 'loose', label: 'LAG', emoji: '🔥' },
-    { type: 'passive', label: '松被动', emoji: '🐢' },
-    { type: 'nit', label: 'Nit', emoji: '🔒' },
-    { type: 'custom', label: '自定义', emoji: '⚙️' },
-  ];
 
   // ============================================
   // 渲染
   // ============================================
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
-      {/* 顶部标题栏 */}
-      <header className="bg-gray-900/80 border-b border-gray-700 sticky top-0 z-50 backdrop-blur-sm">
-        <div className="max-w-7xl mx-auto px-3 py-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-teal-500 rounded-lg flex items-center justify-center">
-                <Calculator className="w-4 h-4 text-white" />
-              </div>
-              <div>
-                <h1 className="text-base lg:text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-400">
-                  德州扑克 Pro
-                </h1>
-                <p className="text-gray-500 text-[10px] hidden sm:block">
-                  Range vs Range · Structured Equity Analysis
-                </p>
+    <div className="min-h-screen bg-gray-950 lg:bg-gradient-to-br lg:from-gray-900 lg:via-gray-800 lg:to-gray-900">
+
+      {/* ====== STICKY HEADER: Logo + Street + Board ====== */}
+      <header className="sticky top-0 z-50 bg-gray-950/95 backdrop-blur-md border-b border-white/5">
+        {/* Top bar */}
+        <div className="flex items-center justify-between px-4 py-2">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 bg-gradient-to-br from-emerald-500 to-teal-500 rounded-lg flex items-center justify-center">
+              <Calculator className="w-3.5 h-3.5 text-white" />
+            </div>
+            <span className="text-sm font-bold text-white">
+              Poker Pro
+            </span>
+            {hasRange && (
+              <span className="text-emerald-400 text-[10px] font-mono bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                {playerRange.size}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Settings trigger */}
+            <button
+              onClick={() => setSettingsOpen(!settingsOpen)}
+              className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5 text-gray-400 hover:text-white transition-colors"
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+            </button>
+            {/* Desktop sim/opponent selectors */}
+            <div className="hidden lg:flex items-center gap-2">
+              <select value={simulations} onChange={(e) => setSimulations(Number(e.target.value))}
+                disabled={isSimulating} className="bg-white/5 text-white text-xs rounded-lg px-2 py-1.5 border-0 h-8">
+                <option value={10000}>10K</option>
+                <option value={50000}>50K</option>
+                <option value={100000}>100K</option>
+                <option value={200000}>200K</option>
+              </select>
+              <select value={opponentCount} onChange={(e) => handleOpponentCountChange(Number(e.target.value))}
+                disabled={isSimulating} className="bg-white/5 text-white text-xs rounded-lg px-2 py-1.5 border-0 h-8">
+                {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}人</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Street selector (compact pill bar) */}
+        <div className="flex px-3 pb-2 gap-1 lg:hidden">
+          {STREETS.map(s => (
+            <button key={s.id} onClick={() => handleStreetChange(s.id)} disabled={isSimulating}
+              className={`flex-1 py-1.5 rounded-lg text-[11px] font-medium transition-all
+                ${street === s.id
+                  ? 'bg-emerald-500 text-white'
+                  : 'bg-white/5 text-gray-500 active:bg-white/10'
+                } disabled:opacity-40`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Community cards (only when not preflop) */}
+        {street !== 'preflop' && (
+          <div className="px-3 pb-2">
+            <CommunityCardMatrix
+              onCardSelect={handleCommunityCardSelect}
+              onCardRemove={handleCommunityCardRemove}
+              communityCards={communityCards}
+              disabledCards={[]}
+              maxCards={getMaxCards()}
+            />
+          </div>
+        )}
+      </header>
+
+      {/* ====== SETTINGS OVERLAY (mobile: slide-down, replaces modal) ====== */}
+      {settingsOpen && (
+        <div className="fixed inset-0 z-[60] lg:hidden">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setSettingsOpen(false)} />
+          <div className="absolute top-0 left-0 right-0 bg-gray-900 border-b border-white/10 rounded-b-2xl p-4 pt-3 animate-in slide-in-from-top duration-200 shadow-2xl">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-white text-sm font-semibold">设置</h3>
+              <button onClick={() => setSettingsOpen(false)} className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5 text-gray-400">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Opponent type */}
+            <div className="mb-3">
+              <label className="text-gray-500 text-[10px] uppercase tracking-wider mb-1.5 block">对手类型</label>
+              <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
+                {OPPONENT_PILLS.map(pill => (
+                  <button key={pill.type} onClick={() => handleOpponentTypeChange(pill.type)} disabled={isSimulating}
+                    className={`flex-shrink-0 flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all whitespace-nowrap
+                      ${opponentType === pill.type
+                        ? 'bg-purple-500/20 text-purple-400 ring-1 ring-purple-500/30'
+                        : 'bg-white/5 text-gray-400'
+                      } disabled:opacity-40`}
+                  >
+                    <span>{pill.emoji}</span>{pill.label}
+                  </button>
+                ))}
               </div>
             </div>
 
-            {/* 桌面端快捷设置 */}
-            <div className="hidden lg:flex items-center gap-3">
-              <div className="flex items-center gap-1.5">
-                <label className="text-gray-400 text-xs">模拟:</label>
-                <select
-                  value={simulations}
-                  onChange={(e) => setSimulations(Number(e.target.value))}
-                  disabled={isSimulating}
-                  className="bg-gray-700 text-white text-sm rounded px-2 py-1 disabled:opacity-50 min-h-[36px]"
-                >
-                  <option value={10000}>10K</option>
-                  <option value={50000}>50K</option>
-                  <option value={100000}>100K</option>
-                  <option value={200000}>200K</option>
-                </select>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <label className="text-gray-400 text-xs">对手:</label>
-                <select
-                  value={opponentCount}
-                  onChange={(e) => handleOpponentCountChange(Number(e.target.value))}
-                  disabled={isSimulating}
-                  className="bg-gray-700 text-white text-sm rounded px-2 py-1 disabled:opacity-50 min-h-[36px]"
-                >
-                  {[1, 2, 3, 4, 5].map(n => (
-                    <option key={n} value={n}>{n}人</option>
+            {/* Opponent count + simulations */}
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="text-gray-500 text-[10px] uppercase tracking-wider mb-1.5 block">对手数</label>
+                <div className="flex gap-1">
+                  {[1, 2, 3].map(n => (
+                    <button key={n} onClick={() => handleOpponentCountChange(n)} disabled={isSimulating}
+                      className={`flex-1 py-2 rounded-lg text-xs font-medium transition-all
+                        ${opponentCount === n ? 'bg-emerald-500 text-white' : 'bg-white/5 text-gray-400'}
+                        disabled:opacity-40`}
+                    >{n}</button>
                   ))}
-                </select>
+                </div>
+              </div>
+              <div>
+                <label className="text-gray-500 text-[10px] uppercase tracking-wider mb-1.5 block">模拟次数</label>
+                <div className="flex gap-1">
+                  {[10000, 50000, 100000].map(n => (
+                    <button key={n} onClick={() => setSimulations(n)} disabled={isSimulating}
+                      className={`flex-1 py-2 rounded-lg text-[10px] font-medium transition-all
+                        ${simulations === n ? 'bg-emerald-500 text-white' : 'bg-white/5 text-gray-400'}
+                        disabled:opacity-40`}
+                    >{n >= 1000 ? `${n / 1000}K` : n}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Chips */}
+            <div>
+              <label className="text-gray-500 text-[10px] uppercase tracking-wider mb-1.5 block">筹码</label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { label: '底池', value: potSize, setter: setPotSize },
+                  { label: '下注', value: betSize, setter: setBetSize },
+                  { label: '筹码', value: stackSize, setter: setStackSize },
+                ].map(item => (
+                  <div key={item.label}>
+                    <label className="text-gray-500 text-[10px]">{item.label}</label>
+                    <input type="number" inputMode="numeric" value={item.value}
+                      onChange={(e) => item.setter(Number(e.target.value))}
+                      className="w-full bg-white/5 text-white rounded-lg px-2 py-2 text-sm mt-0.5 border-0 focus:ring-1 focus:ring-emerald-500/50"
+                    />
+                  </div>
+                ))}
               </div>
             </div>
           </div>
         </div>
-      </header>
+      )}
 
-      <main className="max-w-7xl mx-auto px-3 py-3 lg:py-6">
-        <div className="grid lg:grid-cols-3 gap-3 lg:gap-6">
-          {/* ========== 左侧/移动端上方：输入区 ========== */}
-          <div className="lg:col-span-1 space-y-3">
+      {/* ====== MAIN CONTENT ====== */}
+      <main className="max-w-7xl mx-auto lg:px-6 lg:py-6">
+        <div className="lg:grid lg:grid-cols-3 lg:gap-6">
 
-            {/* Range 编辑器 */}
-            <div className="bg-gray-800/50 rounded-2xl backdrop-blur-sm border border-gray-700 overflow-hidden">
-              <button
-                onClick={() => setRangeExpanded(!rangeExpanded)}
-                className="w-full flex items-center justify-between px-4 py-3 min-h-[48px]"
-              >
-                <div className="flex items-center gap-2">
-                  <LayoutGrid className="w-4 h-4 text-emerald-400" />
-                  <span className="text-white text-sm font-semibold">Range</span>
-                  {hasRange && (
-                    <span className="bg-emerald-500/20 text-emerald-400 text-xs px-2 py-0.5 rounded-full font-mono">
-                      {playerRange.size} combos
-                    </span>
-                  )}
+          {/* ======= LEFT: Range Matrix (Mobile: full-width king) ======= */}
+          <div className="lg:col-span-1 space-y-0 lg:space-y-4">
+
+            {/* Range presets */}
+            <div className="flex gap-1.5 px-3 py-2 overflow-x-auto no-scrollbar lg:px-0">
+              {RANGE_PRESETS.map(preset => (
+                <button key={preset.key}
+                  onClick={() => {
+                    const combos = new Set<HandCombo>(preset.combos);
+                    handleRangeChange(combos, preset.combos.join(', '));
+                  }}
+                  className="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 text-gray-400 hover:bg-emerald-500/20 hover:text-emerald-400 active:scale-95 transition-all whitespace-nowrap"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+
+            {/* THE MATRIX — always visible on mobile */}
+            <div className="px-2 pb-2 lg:px-0">
+              <RangeMatrix
+                onRangeChange={handleRangeChange}
+                selectedRange={playerRange}
+                disabledCards={communityCards}
+              />
+            </div>
+
+            {/* Desktop: Street selector + community cards + opponents */}
+            <div className="hidden lg:block space-y-4">
+              {/* Street */}
+              <div className="bg-gray-800/40 rounded-2xl p-3">
+                <div className="flex gap-1.5 mb-2">
+                  {STREETS.map(s => (
+                    <button key={s.id} onClick={() => handleStreetChange(s.id)} disabled={isSimulating}
+                      className={`flex-1 py-2 rounded-xl text-xs font-medium transition-all
+                        ${street === s.id
+                          ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg'
+                          : 'bg-gray-700/50 text-gray-400 hover:bg-gray-700'
+                        } disabled:opacity-50`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
                 </div>
-                <div className="flex items-center gap-2">
-                  {hasRange && (
-                    <span className="text-gray-400 text-xs font-mono truncate max-w-[120px]">{rangeString}</span>
-                  )}
-                  {rangeExpanded ? (
-                    <ChevronUp className="w-4 h-4 text-gray-400" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4 text-gray-400" />
-                  )}
-                </div>
-              </button>
-
-              {rangeExpanded && (
-                <div className="px-2 pb-3 animate-in slide-in-from-top-2 duration-200">
-                  <RangeMatrix
-                    onRangeChange={handleRangeChange}
-                    selectedRange={playerRange}
-                    disabledCards={communityCards}
+                {street !== 'preflop' && (
+                  <CommunityCardMatrix
+                    onCardSelect={handleCommunityCardSelect}
+                    onCardRemove={handleCommunityCardRemove}
+                    communityCards={communityCards}
+                    disabledCards={[]}
+                    maxCards={getMaxCards()}
                   />
-                </div>
-              )}
-
-              {!rangeExpanded && (
-                <div className="px-3 pb-3 flex gap-1.5 overflow-x-auto no-scrollbar">
-                  {[
-                    { key: 'top5', label: 'Top 5%', combos: ['AA', 'KK', 'QQ', 'JJ', 'TT', 'AKs', 'AQs', 'AKo'] },
-                    { key: 'top10', label: 'Top 10%', combos: ['AA', 'KK', 'QQ', 'JJ', 'TT', '99', 'AKs', 'AQs', 'AJs', 'ATs', 'AKo', 'AQo', 'KQs'] },
-                    { key: 'top20', label: 'Top 20%', combos: ['AA', 'KK', 'QQ', 'JJ', 'TT', '99', '88', '77', 'AKs', 'AQs', 'AJs', 'ATs', 'A9s', 'A8s', 'A5s', 'A4s', 'KQs', 'KJs', 'KTs', 'QJs', 'QTs', 'JTs', 'AKo', 'AQo', 'AJo', 'ATo', 'KQo', 'KJo'] },
-                    { key: 'pairs', label: '对子', combos: ['AA', 'KK', 'QQ', 'JJ', 'TT', '99', '88', '77', '66', '55', '44', '33', '22'] },
-                  ].map(preset => (
-                    <button
-                      key={preset.key}
-                      onClick={() => {
-                        const combos = new Set<HandCombo>(preset.combos);
-                        handleRangeChange(combos, preset.combos.join(', '));
-                      }}
-                      className="flex-shrink-0 px-3 py-2 rounded-xl text-xs font-medium bg-gray-700/60 text-gray-300 hover:bg-emerald-500/20 hover:text-emerald-400 transition-colors whitespace-nowrap min-h-[40px]"
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* 街道 + 公共牌 */}
-            <div className="bg-gray-800/50 rounded-2xl p-3 backdrop-blur-sm border border-gray-700">
-              <div className="flex gap-1.5 mb-2">
-                {([
-                  { id: 'preflop', label: '翻前' },
-                  { id: 'flop', label: '翻牌' },
-                  { id: 'turn', label: '转牌' },
-                  { id: 'river', label: '河牌' }
-                ] as const).map(s => (
-                  <button
-                    key={s.id}
-                    onClick={() => handleStreetChange(s.id)}
-                    disabled={isSimulating}
-                    className={`
-                      flex-1 py-2 rounded-xl text-center transition-all text-xs font-medium min-h-[44px]
-                      ${street === s.id
-                        ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg'
-                        : 'bg-gray-700/50 text-gray-400 hover:bg-gray-700'
-                      }
-                      disabled:opacity-50
-                    `}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-
-              {street !== 'preflop' && (
-                <CommunityCardMatrix
-                  onCardSelect={handleCommunityCardSelect}
-                  onCardRemove={handleCommunityCardRemove}
-                  communityCards={communityCards}
-                  disabledCards={[]}
-                  maxCards={getMaxCards()}
-                />
-              )}
-            </div>
-
-            {/* 对手预设 + 对手数量 */}
-            <div className="bg-gray-800/50 rounded-2xl p-3 backdrop-blur-sm border border-gray-700">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-white text-sm font-semibold flex items-center gap-1.5">
-                  <Users className="w-4 h-4 text-purple-400" />
-                  对手
-                </h3>
-                {/* 对手数量 */}
-                <div className="flex gap-1">
-                  {[1, 2, 3].map(n => (
-                    <button
-                      key={n}
-                      onClick={() => handleOpponentCountChange(n)}
-                      disabled={isSimulating}
-                      className={`
-                        w-8 h-8 rounded-lg text-xs font-medium transition-all
-                        ${opponentCount === n
-                          ? 'bg-emerald-500 text-white'
-                          : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
-                        }
-                        disabled:opacity-50
-                      `}
-                    >
-                      {n}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-                {OPPONENT_PILLS.map(pill => (
-                  <button
-                    key={pill.type}
-                    onClick={() => handleOpponentTypeChange(pill.type)}
-                    disabled={isSimulating}
-                    className={`
-                      flex-shrink-0 flex items-center gap-1 px-3 py-2.5 rounded-xl text-xs font-medium
-                      transition-all min-h-[44px] whitespace-nowrap
-                      ${opponentType === pill.type
-                        ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg shadow-purple-500/20'
-                        : 'bg-gray-700/60 text-gray-300 hover:bg-gray-600/60'
-                      }
-                      disabled:opacity-50
-                    `}
-                  >
-                    <span>{pill.emoji}</span>
-                    {pill.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* 筹码设置 (可折叠) */}
-            <div className="bg-gray-800/50 rounded-2xl backdrop-blur-sm border border-gray-700 overflow-hidden">
-              <button
-                onClick={() => setSettingsExpanded(!settingsExpanded)}
-                className="w-full flex items-center justify-between px-4 py-3 min-h-[48px]"
-              >
-                <div className="flex items-center gap-2">
-                  <SlidersHorizontal className="w-4 h-4 text-yellow-400" />
-                  <span className="text-white text-sm font-semibold">筹码</span>
-                  <span className="text-gray-400 text-xs">
-                    底池 {potSize} · 下注 {betSize}
-                  </span>
-                </div>
-                {settingsExpanded ? (
-                  <ChevronUp className="w-4 h-4 text-gray-400" />
-                ) : (
-                  <ChevronDown className="w-4 h-4 text-gray-400" />
                 )}
-              </button>
+              </div>
 
-              {settingsExpanded && (
-                <div className="px-4 pb-3 animate-in slide-in-from-top-2 duration-200">
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      { label: '底池', value: potSize, setter: setPotSize },
-                      { label: '下注', value: betSize, setter: setBetSize },
-                      { label: '筹码', value: stackSize, setter: setStackSize }
-                    ].map(item => (
-                      <div key={item.label}>
-                        <label className="text-gray-400 text-[10px]">{item.label}</label>
-                        <input
-                          type="number"
-                          inputMode="numeric"
-                          value={item.value}
-                          onChange={(e) => item.setter(Number(e.target.value))}
-                          className="w-full bg-gray-700 text-white rounded-lg px-2 py-2.5 text-sm mt-0.5 min-h-[44px] text-base"
-                        />
-                      </div>
+              {/* Opponents (desktop) */}
+              <div className="bg-gray-800/40 rounded-2xl p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-white text-sm font-semibold flex items-center gap-1.5">
+                    <Users className="w-4 h-4 text-purple-400" /> 对手
+                  </h3>
+                  <div className="flex gap-1">
+                    {[1, 2, 3].map(n => (
+                      <button key={n} onClick={() => handleOpponentCountChange(n)} disabled={isSimulating}
+                        className={`w-7 h-7 rounded-lg text-xs font-medium transition-all
+                          ${opponentCount === n ? 'bg-emerald-500 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}
+                          disabled:opacity-50`}
+                      >{n}</button>
                     ))}
                   </div>
-
-                  {/* 模拟次数 */}
-                  <div className="mt-2 pt-2 border-t border-gray-700/50">
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-400 text-xs">模拟次数</span>
-                      <div className="flex gap-1">
-                        {[10000, 50000, 100000].map(n => (
-                          <button
-                            key={n}
-                            onClick={() => setSimulations(n)}
-                            disabled={isSimulating}
-                            className={`px-2.5 py-1.5 rounded-lg text-xs font-medium min-h-[32px]
-                              ${simulations === n ? 'bg-emerald-500 text-white' : 'bg-gray-700 text-gray-400'}
-                              disabled:opacity-50`}
-                          >
-                            {n >= 1000 ? `${n / 1000}K` : n}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
                 </div>
-              )}
+                <div className="flex gap-1.5 flex-wrap">
+                  {OPPONENT_PILLS.map(pill => (
+                    <button key={pill.type} onClick={() => handleOpponentTypeChange(pill.type)} disabled={isSimulating}
+                      className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium transition-all
+                        ${opponentType === pill.type
+                          ? 'bg-purple-500/20 text-purple-400 ring-1 ring-purple-500/30'
+                          : 'bg-gray-700/60 text-gray-300 hover:bg-gray-600/60'
+                        } disabled:opacity-50`}
+                    >
+                      <span>{pill.emoji}</span>{pill.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Chips (desktop) */}
+              <div className="bg-gray-800/40 rounded-2xl p-3">
+                <h3 className="text-white text-sm font-semibold flex items-center gap-1.5 mb-2">
+                  <SlidersHorizontal className="w-4 h-4 text-yellow-400" /> 筹码
+                </h3>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { label: '底池', value: potSize, setter: setPotSize },
+                    { label: '下注', value: betSize, setter: setBetSize },
+                    { label: '筹码', value: stackSize, setter: setStackSize },
+                  ].map(item => (
+                    <div key={item.label}>
+                      <label className="text-gray-400 text-[10px]">{item.label}</label>
+                      <input type="number" value={item.value}
+                        onChange={(e) => item.setter(Number(e.target.value))}
+                        className="w-full bg-gray-700 text-white rounded-lg px-2 py-2 text-sm mt-0.5"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* ========== 右侧/移动端下方：结果区（内联，所有视口都可见） ========== */}
-          <div className="lg:col-span-2">
-            <div className="bg-gray-800/50 rounded-2xl p-4 lg:p-6 backdrop-blur-sm border border-gray-700">
-              {!hasRange ? (
-                <div className="text-center py-10 text-gray-400">
-                  <Target className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                  <p className="text-sm font-medium">请选择你的 Range</p>
-                  <p className="text-xs mt-1 text-gray-500">点击矩阵 cell 或使用快捷预设</p>
-                </div>
-              ) : isSimulating ? (
-                <div className="text-center py-8">
-                  <div className="relative w-24 h-24 lg:w-32 lg:h-32 mx-auto mb-4">
-                    <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
-                      <circle cx="50" cy="50" r="45" fill="none" stroke="#374151" strokeWidth="8" />
-                      <circle
-                        cx="50" cy="50" r="45" fill="none" stroke="url(#progressGrad)"
-                        strokeWidth="8" strokeLinecap="round"
-                        strokeDasharray={`${progress * 2.83} 283`}
-                        className="transition-all duration-300"
-                      />
-                      <defs>
-                        <linearGradient id="progressGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                          <stop offset="0%" stopColor="#10b981" />
-                          <stop offset="100%" stopColor="#14b8a6" />
-                        </linearGradient>
-                      </defs>
-                    </svg>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-xl lg:text-2xl font-bold text-white">{Math.round(progress)}%</span>
-                    </div>
-                  </div>
-                  <p className="text-gray-400 text-sm mb-2">
-                    Range vs Range · {simulations.toLocaleString()} 次模拟
-                  </p>
-                  <p className="text-emerald-400 text-xs mb-3 flex items-center justify-center gap-1">
-                    <Zap className="w-3 h-3" /> Web Worker 后台计算
-                  </p>
-                  {progressDetail && (
-                    <div className="flex justify-center gap-4 text-sm mb-3">
-                      <span className="text-emerald-400">胜: {progressDetail.wins}</span>
-                      <span className="text-yellow-400">平: {progressDetail.ties}</span>
-                      <span className="text-red-400">负: {progressDetail.losses}</span>
-                    </div>
-                  )}
-                  <button
-                    onClick={cancelSimulation}
-                    className="px-4 py-2.5 bg-red-500/20 text-red-400 rounded-xl text-sm hover:bg-red-500/30 flex items-center gap-2 mx-auto min-h-[44px]"
-                  >
-                    <RotateCcw className="w-4 h-4" /> 取消
-                  </button>
-                </div>
-              ) : error ? (
-                <div className="text-center py-10">
-                  <AlertCircle className="w-12 h-12 mx-auto mb-3 text-red-400" />
-                  <p className="text-red-400 mb-4">{error}</p>
-                  <button
-                    onClick={() => runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange))}
-                    className="px-4 py-2.5 bg-emerald-500 text-white rounded-xl text-sm hover:bg-emerald-600 flex items-center gap-2 mx-auto min-h-[44px]"
-                  >
-                    <RotateCcw className="w-4 h-4" /> 重试
-                  </button>
-                </div>
-              ) : equityResult ? (
-                <AnalysisTabs
-                  equityWin={equityResult.win}
-                  equityTie={equityResult.tie}
-                  equityLose={equityResult.lose}
-                  simulations={equityResult.simulations}
-                  rangeString={rangeString}
-                  equityByCombo={equityResult.equityByCombo}
-                  equityHistogram={equityResult.equityHistogram}
-                  outsResult={outsResult}
-                  potOddsResult={potOddsResult}
-                  evResult={evResult}
-                  blockerResult={blockerResult}
-                  streetEquity={streetEquity}
-                  nutResult={nutResult}
-                  foldEquity={foldEquity}
-                  onFoldEquityChange={setFoldEquity}
-                  potSize={potSize}
-                  betSize={betSize}
-                />
-              ) : null}
+          {/* ======= RIGHT: Results (Desktop only — inline) ======= */}
+          <div className="hidden lg:block lg:col-span-2">
+            <div className="bg-gray-800/40 rounded-2xl p-6">
+              {renderAnalysis()}
             </div>
-
-            {/* Equity Chart (per combo) */}
-            {equityResult?.equityByCombo && Object.keys(equityResult.equityByCombo).length > 0 && (
-              <Suspense fallback={<div className="h-40 bg-gray-800/50 rounded-2xl mt-3 animate-pulse" />}>
-                <div className="mt-3">
-                  <EquityChart equityByCombo={equityResult.equityByCombo} />
-                </div>
-              </Suspense>
-            )}
           </div>
         </div>
       </main>
 
-      {/* 底部说明 */}
-      <footer className="max-w-7xl mx-auto px-4 py-4 text-center text-gray-500 text-xs space-y-0.5">
-        <p className="flex items-center justify-center gap-1">
-          <Zap className="w-3 h-3" /> Range vs Range · Structured Equity · Histogram
-        </p>
-        <p>Web Worker · 100K sims · Mobile-First</p>
-      </footer>
+      {/* ====== MOBILE BOTTOM DRAWER (vaul) ====== */}
+      <div className="lg:hidden">
+        <Drawer.Root open={drawerOpen} onOpenChange={setDrawerOpen}>
+          {/* Floating trigger bar — always visible at bottom */}
+          <Drawer.Trigger asChild>
+            <button className="fixed bottom-0 left-0 right-0 z-40 bg-gray-900/95 backdrop-blur-md border-t border-white/10 px-4 py-3 flex items-center justify-between active:bg-gray-800/90 transition-colors safe-area-bottom">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-emerald-400" />
+                {equityResult ? (
+                  <div className="flex items-center gap-3">
+                    <span className="text-emerald-400 text-sm font-bold">{equityResult.win.toFixed(1)}%</span>
+                    <span className="text-gray-600 text-xs">|</span>
+                    <span className="text-yellow-400/80 text-xs">{equityResult.tie.toFixed(1)}%</span>
+                    <span className="text-gray-600 text-xs">|</span>
+                    <span className="text-red-400/80 text-xs">{equityResult.lose.toFixed(1)}%</span>
+                  </div>
+                ) : isSimulating ? (
+                  <span className="text-gray-400 text-xs">模拟中 {Math.round(progress)}%...</span>
+                ) : (
+                  <span className="text-gray-500 text-xs">查看分析结果</span>
+                )}
+              </div>
+              <ChevronUp className="w-4 h-4 text-gray-500" />
+            </button>
+          </Drawer.Trigger>
+
+          <Drawer.Portal>
+            <Drawer.Overlay className="fixed inset-0 bg-black/60 z-[70]" />
+            <Drawer.Content className="fixed bottom-0 left-0 right-0 z-[80] bg-gray-950 rounded-t-2xl max-h-[85vh] outline-none">
+              {/* Drag handle */}
+              <div className="flex justify-center pt-3 pb-2">
+                <div className="w-10 h-1 bg-white/20 rounded-full" />
+              </div>
+
+              {/* Drawer header */}
+              <div className="flex items-center justify-between px-4 pb-2 border-b border-white/5">
+                <Drawer.Title className="text-white text-sm font-semibold">分析结果</Drawer.Title>
+                {equityResult && (
+                  <span className="text-emerald-400 text-lg font-bold">{equityResult.win.toFixed(1)}%</span>
+                )}
+              </div>
+
+              {/* Drawer body — scrollable */}
+              <div className="overflow-y-auto px-4 pt-3 pb-8" style={{ maxHeight: 'calc(85vh - 80px)' }}>
+                {renderAnalysis()}
+              </div>
+            </Drawer.Content>
+          </Drawer.Portal>
+        </Drawer.Root>
+      </div>
+
+      {/* Bottom safe area spacer for mobile (so content isn't hidden behind trigger bar) */}
+      <div className="h-16 lg:hidden" />
     </div>
   );
 }
