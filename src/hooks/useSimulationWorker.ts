@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Card, OpponentType, EquityResult, HandRank } from '@/lib/poker/pro-types';
+import { Card, OpponentType, EquityResult, HandRank, ComboEquity } from '@/lib/poker/pro-types';
 
 // Worker 消息类型定义
 interface ProgressUpdate {
@@ -22,22 +22,29 @@ interface SimulationComplete {
   confidence: number;
   handRank?: HandRank;
   outs?: number;
+  equityByCombo?: Record<string, ComboEquity> | null;
 }
 
 type WorkerResponse = ProgressUpdate | SimulationComplete;
 
+// 扩展 EquityResult 以包含 RvR 数据
+export interface ExtendedEquityResult extends EquityResult {
+  equityByCombo?: Record<string, ComboEquity> | null;
+}
+
 // Hook 返回类型
 interface UseSimulationWorkerReturn {
-  equityResult: EquityResult | null;
+  equityResult: ExtendedEquityResult | null;
   isSimulating: boolean;
   progress: number;
   error: string | null;
   runSimulation: (
-    playerHand: Card[],
+    playerHand: Card[] | null,
     communityCards: Card[],
     opponentType: OpponentType,
     opponentCount: number,
-    simulations: number
+    simulations: number,
+    playerRange?: string[]
   ) => void;
   cancelSimulation: () => void;
   progressDetail: {
@@ -49,15 +56,16 @@ interface UseSimulationWorkerReturn {
 }
 
 /**
- * Web Worker Hook - 蒙特卡洛模拟
- * 
+ * Web Worker Hook - 蒙特卡洛模拟 (Range vs Range 版)
+ *
  * 核心优化：
  * 1. 每次计算前强制 terminate 旧 Worker，防止丧尸任务排队
  * 2. UI 永不阻塞，Loading 动画流畅运行
  * 3. 实时进度更新，可随时取消
+ * 4. 支持 playerRange 参数用于 RvR 模拟
  */
 export function useSimulationWorker(): UseSimulationWorkerReturn {
-  const [equityResult, setEquityResult] = useState<EquityResult | null>(null);
+  const [equityResult, setEquityResult] = useState<ExtendedEquityResult | null>(null);
   const [isSimulating, setIsSimulating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -83,21 +91,18 @@ export function useSimulationWorker(): UseSimulationWorkerReturn {
   // 运行模拟
   const runSimulation = useCallback(
     (
-      playerHand: Card[],
+      playerHand: Card[] | null,
       communityCards: Card[],
       opponentType: OpponentType,
       opponentCount: number,
-      simulations: number
+      simulations: number,
+      playerRange?: string[]
     ) => {
-      // ============================================
-      // 【防卡顿核心1】每次计算前，一枪崩掉旧的 Worker
-      // 防止丧尸任务排队卡死通道
-      // ============================================
+      // 每次计算前，一枪崩掉旧的 Worker
       if (workerRef.current) {
         workerRef.current.terminate();
       }
 
-      // 新建一个干净的 Worker 专属此次计算
       const worker = new Worker('/simulation-worker.js');
       workerRef.current = worker;
 
@@ -113,7 +118,6 @@ export function useSimulationWorker(): UseSimulationWorkerReturn {
         const data = event.data;
 
         if (data.type === 'progress') {
-          // 进度更新
           setProgress(data.progress);
           setProgressDetail({
             wins: data.currentWins,
@@ -122,7 +126,6 @@ export function useSimulationWorker(): UseSimulationWorkerReturn {
             currentSimulations: data.currentSimulations
           });
         } else if (data.type === 'complete') {
-          // 模拟完成
           setEquityResult({
             win: data.win,
             tie: data.tie,
@@ -130,7 +133,8 @@ export function useSimulationWorker(): UseSimulationWorkerReturn {
             simulations: data.simulations,
             confidence: data.confidence,
             handRank: data.handRank,
-            outs: data.outs
+            outs: data.outs,
+            equityByCombo: data.equityByCombo
           });
           setIsSimulating(false);
           setProgress(100);
@@ -138,9 +142,12 @@ export function useSimulationWorker(): UseSimulationWorkerReturn {
         }
       };
 
-      // 验证输入
-      if (!playerHand || playerHand.length !== 2) {
-        setError('请选择有效的手牌');
+      // 验证输入：要么有固定手牌，要么有 range
+      const hasRange = playerRange && playerRange.length > 0;
+      const hasHand = playerHand && playerHand.length === 2;
+
+      if (!hasRange && !hasHand) {
+        setError('请选择手牌或范围');
         return;
       }
 
@@ -151,10 +158,11 @@ export function useSimulationWorker(): UseSimulationWorkerReturn {
       setEquityResult(null);
       setProgressDetail(null);
 
-      // 立即发送请求到 Worker
+      // 发送到 Worker
       worker.postMessage({
         type: 'simulate',
-        playerHand,
+        playerHand: hasRange ? null : playerHand,
+        playerRange: hasRange ? playerRange : null,
         communityCards: communityCards || [],
         opponentType,
         opponentCount,
@@ -167,11 +175,9 @@ export function useSimulationWorker(): UseSimulationWorkerReturn {
   // 取消模拟
   const cancelSimulation = useCallback(() => {
     if (workerRef.current) {
-      // 终止当前 Worker
       workerRef.current.terminate();
       workerRef.current = null;
     }
-
     setIsSimulating(false);
     setProgress(0);
     setProgressDetail(null);

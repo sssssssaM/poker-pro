@@ -15,13 +15,23 @@ export interface Card {
 }
 
 // 牌型
-export type HandRank = 
-  | 'High Card' | 'Pair' | 'Two Pair' | 'Three of a Kind' 
-  | 'Straight' | 'Flush' | 'Full House' | 'Four of a Kind' 
+export type HandRank =
+  | 'High Card' | 'Pair' | 'Two Pair' | 'Three of a Kind'
+  | 'Straight' | 'Flush' | 'Full House' | 'Four of a Kind'
   | 'Straight Flush' | 'Royal Flush';
 
 // 手牌组合（如 AKs, QQ, JTo）
 export type HandCombo = string;
+
+// Range 选择（矩阵中选中的 combo 集合）
+export type RangeSelection = Set<HandCombo>;
+
+// 每个 combo 的独立胜率（用于 RvR 分析）
+export interface ComboEquity {
+  wins: number;
+  total: number;
+  equity: number; // 百分比
+}
 
 // 手牌范围（Range）
 export interface HandRange {
@@ -29,8 +39,36 @@ export interface HandRange {
   weight: number; // 权重 0-100
 }
 
+// 预设 Range
+export const TOP_RANGE_PRESETS: Record<string, { label: string; combos: HandCombo[] }> = {
+  'top5': {
+    label: 'Top 5%',
+    combos: ['AA', 'KK', 'QQ', 'JJ', 'TT', 'AKs', 'AQs', 'AKo']
+  },
+  'top10': {
+    label: 'Top 10%',
+    combos: ['AA', 'KK', 'QQ', 'JJ', 'TT', '99', 'AKs', 'AQs', 'AJs', 'ATs', 'AKo', 'AQo', 'KQs']
+  },
+  'top20': {
+    label: 'Top 20%',
+    combos: ['AA', 'KK', 'QQ', 'JJ', 'TT', '99', '88', '77', 'AKs', 'AQs', 'AJs', 'ATs', 'A9s', 'A8s', 'A5s', 'A4s', 'KQs', 'KJs', 'KTs', 'QJs', 'QTs', 'JTs', 'AKo', 'AQo', 'AJo', 'ATo', 'KQo', 'KJo']
+  },
+  'broadway': {
+    label: 'Broadway',
+    combos: ['AA', 'KK', 'QQ', 'JJ', 'TT', 'AKs', 'AQs', 'AJs', 'ATs', 'KQs', 'KJs', 'KTs', 'QJs', 'QTs', 'JTs', 'AKo', 'AQo', 'AJo', 'ATo', 'KQo', 'KJo', 'KTo', 'QJo', 'QTo', 'JTo']
+  },
+  'pairs': {
+    label: '对子',
+    combos: ['AA', 'KK', 'QQ', 'JJ', 'TT', '99', '88', '77', '66', '55', '44', '33', '22']
+  },
+  'suitedConnectors': {
+    label: '同花连牌',
+    combos: ['AKs', 'KQs', 'QJs', 'JTs', 'T9s', '98s', '87s', '76s', '65s', '54s', '43s', '32s']
+  }
+};
+
 // 对手类型
-export type OpponentType = 
+export type OpponentType =
   | 'random'        // 随机牌
   | 'tight'         // 紧凶 TAG
   | 'loose'         // 松凶 LAG
@@ -168,7 +206,7 @@ export function getComboName(row: number, col: number): HandCombo {
   const ranks = RANKS;
   const rank1 = ranks[row];
   const rank2 = ranks[col];
-  
+
   if (row === col) {
     return `${rank1}${rank2}`; // 对子
   } else if (row < col) {
@@ -182,14 +220,14 @@ export function getComboName(row: number, col: number): HandCombo {
 export function parseCombo(combo: HandCombo): { rank1: Rank; rank2: Rank; suited: boolean } | null {
   const match = combo.match(/^([AKQJT98765432]{1,2})([so]?)$/);
   if (!match) return null;
-  
+
   const ranks = match[1];
   const suffix = match[2];
-  
+
   if (ranks.length === 2 && ranks[0] === ranks[1]) {
     return { rank1: ranks[0] as Rank, rank2: ranks[1] as Rank, suited: true };
   }
-  
+
   return {
     rank1: ranks[0] as Rank,
     rank2: ranks[1] as Rank,
