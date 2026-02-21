@@ -71,7 +71,9 @@ export function PokerCalculatorPro() {
   // ====== 对手设置 ======
   const [opponentCount, setOpponentCount] = useState(1);
   const [opponentType, setOpponentType] = useState<OpponentType>('random');
+  const [villainRange, setVillainRange] = useState<Set<HandCombo>>(new Set());
   const [villainRangeStr, setVillainRangeStr] = useState('');
+  const [activeEditor, setActiveEditor] = useState<'hero' | 'villain'>('hero');
 
   // ====== 筹码设置 ======
   const [potSize, setPotSize] = useState(100);
@@ -105,11 +107,11 @@ export function PokerCalculatorPro() {
 
   const hasRange = playerRange.size > 0;
 
-  // 解析自定义 villain range
-  const parsedVillainRange = useMemo(() => {
-    if (opponentType !== 'custom' || !villainRangeStr.trim()) return undefined;
-    return Array.from(parseRangeString(villainRangeStr));
-  }, [opponentType, villainRangeStr]);
+  // 解析自定义 villain range (from Set)
+  const getVillainRangeArray = useCallback(() => {
+    if (opponentType !== 'custom' || villainRange.size === 0) return undefined;
+    return Array.from(villainRange);
+  }, [opponentType, villainRange]);
 
   // 底池赔率
   const potOddsResult = useMemo(() =>
@@ -210,18 +212,30 @@ export function PokerCalculatorPro() {
     return () => { cancelled = true; };
   }, [communityCards, playerRange, equityResult]);
 
-  // Range 变化时触发模拟
+  // Hero Range 变化时触发模拟
   const handleRangeChange = useCallback((combos: Set<HandCombo>, str: string) => {
     setPlayerRange(combos);
     setRangeString(str);
     if (combos.size > 0) {
-      const vr = opponentType === 'custom' && villainRangeStr.trim()
-        ? Array.from(parseRangeString(villainRangeStr)) : undefined;
+      const vr = getVillainRangeArray();
       setTimeout(() => {
         runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(combos), vr);
       }, 50);
     }
-  }, [communityCards, opponentType, opponentCount, simulations, runSimulation, villainRangeStr]);
+  }, [communityCards, opponentType, opponentCount, simulations, runSimulation, getVillainRangeArray]);
+
+  // Villain Range 变化时触发模拟
+  const handleVillainRangeChange = useCallback((combos: Set<HandCombo>, str: string) => {
+    setVillainRange(combos);
+    setVillainRangeStr(str);
+    setOpponentType('custom');
+    if (hasRange) {
+      const vr = combos.size > 0 ? Array.from(combos) : undefined;
+      setTimeout(() => {
+        runSimulation(null, communityCards, 'custom', opponentCount, simulations, Array.from(playerRange), vr);
+      }, 50);
+    }
+  }, [communityCards, hasRange, playerRange, opponentCount, simulations, runSimulation]);
 
   const updateStreetByCardCount = useCallback((cardCount: number) => {
     if (cardCount === 0) setStreet('preflop');
@@ -235,48 +249,45 @@ export function PokerCalculatorPro() {
       const newCards = [...prev, card];
       updateStreetByCardCount(newCards.length);
       if (hasRange) {
-        const vr = opponentType === 'custom' && villainRangeStr.trim()
-          ? Array.from(parseRangeString(villainRangeStr)) : undefined;
+        const vr = getVillainRangeArray();
         setTimeout(() => {
           runSimulation(null, newCards, opponentType, opponentCount, simulations, Array.from(playerRange), vr);
         }, 50);
       }
       return newCards;
     });
-  }, [hasRange, playerRange, opponentType, opponentCount, simulations, runSimulation, updateStreetByCardCount, villainRangeStr]);
+  }, [hasRange, playerRange, opponentType, opponentCount, simulations, runSimulation, updateStreetByCardCount, getVillainRangeArray]);
 
   const handleCommunityCardRemove = useCallback((index: number) => {
     setCommunityCards(prev => {
       const newCards = prev.filter((_, i) => i !== index);
       updateStreetByCardCount(newCards.length);
       if (hasRange) {
-        const vr = opponentType === 'custom' && villainRangeStr.trim()
-          ? Array.from(parseRangeString(villainRangeStr)) : undefined;
+        const vr = getVillainRangeArray();
         setTimeout(() => {
           runSimulation(null, newCards, opponentType, opponentCount, simulations, Array.from(playerRange), vr);
         }, 50);
       }
       return newCards;
     });
-  }, [hasRange, playerRange, opponentType, opponentCount, simulations, runSimulation, updateStreetByCardCount, villainRangeStr]);
+  }, [hasRange, playerRange, opponentType, opponentCount, simulations, runSimulation, updateStreetByCardCount, getVillainRangeArray]);
 
   const handleOpponentTypeChange = useCallback((type: OpponentType) => {
     setOpponentType(type);
     if (hasRange) {
-      const vr = type === 'custom' && villainRangeStr.trim()
-        ? Array.from(parseRangeString(villainRangeStr)) : undefined;
+      const vr = type === 'custom' && villainRange.size > 0
+        ? Array.from(villainRange) : undefined;
       runSimulation(null, communityCards, type, opponentCount, simulations, Array.from(playerRange), vr);
     }
-  }, [hasRange, playerRange, communityCards, opponentCount, simulations, runSimulation, villainRangeStr]);
+  }, [hasRange, playerRange, communityCards, opponentCount, simulations, runSimulation, villainRange]);
 
   const handleOpponentCountChange = useCallback((count: number) => {
     setOpponentCount(count);
     if (hasRange) {
-      const vr = opponentType === 'custom' && villainRangeStr.trim()
-        ? Array.from(parseRangeString(villainRangeStr)) : undefined;
+      const vr = getVillainRangeArray();
       runSimulation(null, communityCards, opponentType, count, simulations, Array.from(playerRange), vr);
     }
-  }, [hasRange, playerRange, communityCards, opponentType, simulations, runSimulation, villainRangeStr]);
+  }, [hasRange, playerRange, communityCards, opponentType, simulations, runSimulation, getVillainRangeArray]);
 
   const handleStreetChange = useCallback((s: Street) => {
     setStreet(s);
@@ -333,7 +344,7 @@ export function PokerCalculatorPro() {
       <div className="text-center py-8">
         <AlertCircle className="w-10 h-10 mx-auto mb-2 text-red-400" />
         <p className="text-red-400 text-sm mb-3">{error}</p>
-        <button onClick={() => runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange), parsedVillainRange)}
+        <button onClick={() => runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange), getVillainRangeArray())}
           className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs mx-auto flex items-center gap-1">
           <RotateCcw className="w-3 h-3" /> 重试
         </button>
@@ -477,29 +488,6 @@ export function PokerCalculatorPro() {
                   </button>
                 ))}
               </div>
-              {opponentType === 'custom' && (
-                <div className="mt-2">
-                  <input
-                    type="text"
-                    value={villainRangeStr}
-                    onChange={(e) => setVillainRangeStr(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && hasRange) {
-                        const vr = Array.from(parseRangeString(villainRangeStr));
-                        runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange), vr);
-                      }
-                    }}
-                    onBlur={() => {
-                      if (hasRange && villainRangeStr.trim()) {
-                        const vr = Array.from(parseRangeString(villainRangeStr));
-                        runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange), vr);
-                      }
-                    }}
-                    placeholder="输入: JJ+, AKs, QQ-TT..."
-                    className="w-full bg-white/5 text-white text-xs rounded-lg px-3 py-2 font-mono border border-gray-700 focus:outline-none focus:border-purple-500 placeholder-gray-600"
-                  />
-                </div>
-              )}
             </div>
 
             {/* Opponent count + simulations */}
@@ -575,12 +563,43 @@ export function PokerCalculatorPro() {
               ))}
             </div>
 
+            {/* 🎮 Hero/Villain 编辑器切换标签 */}
+            <div className="flex gap-1 px-2 pb-1 lg:px-0">
+              <button
+                onClick={() => setActiveEditor('hero')}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all
+                  ${activeEditor === 'hero'
+                    ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/20'
+                    : 'bg-white/5 text-gray-400 hover:bg-white/10'
+                  }`}
+              >
+                🦸‍♂️ 我的 Range
+                {playerRange.size > 0 && (
+                  <span className="text-[10px] opacity-70">{playerRange.size}</span>
+                )}
+              </button>
+              <button
+                onClick={() => { setActiveEditor('villain'); setOpponentType('custom'); }}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all
+                  ${activeEditor === 'villain'
+                    ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg shadow-purple-500/20'
+                    : 'bg-white/5 text-gray-400 hover:bg-white/10'
+                  }`}
+              >
+                🦹 对手 Range
+                {villainRange.size > 0 && (
+                  <span className="text-[10px] opacity-70">{villainRange.size}</span>
+                )}
+              </button>
+            </div>
+
             {/* THE MATRIX — always visible on mobile */}
             <div className="px-2 pb-2 lg:px-0">
               <RangeMatrix
-                onRangeChange={handleRangeChange}
-                selectedRange={playerRange}
+                onRangeChange={activeEditor === 'hero' ? handleRangeChange : handleVillainRangeChange}
+                selectedRange={activeEditor === 'hero' ? playerRange : villainRange}
                 disabledCards={communityCards}
+                colorTheme={activeEditor === 'hero' ? 'emerald' : 'purple'}
               />
             </div>
 
@@ -641,29 +660,6 @@ export function PokerCalculatorPro() {
                     </button>
                   ))}
                 </div>
-                {opponentType === 'custom' && (
-                  <div className="mt-2">
-                    <input
-                      type="text"
-                      value={villainRangeStr}
-                      onChange={(e) => setVillainRangeStr(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && hasRange) {
-                          const vr = Array.from(parseRangeString(villainRangeStr));
-                          runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange), vr);
-                        }
-                      }}
-                      onBlur={() => {
-                        if (hasRange && villainRangeStr.trim()) {
-                          const vr = Array.from(parseRangeString(villainRangeStr));
-                          runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange), vr);
-                        }
-                      }}
-                      placeholder="输入: JJ+, AKs, QQ-TT..."
-                      className="w-full bg-gray-700 text-white text-xs rounded-lg px-3 py-2 font-mono border border-gray-600 focus:outline-none focus:border-purple-500 placeholder-gray-500"
-                    />
-                  </div>
-                )}
               </div>
 
               {/* Chips (desktop) */}

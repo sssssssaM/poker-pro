@@ -9,9 +9,10 @@ interface RangeMatrixProps {
   onRangeChange: (selectedCombos: Set<HandCombo>, rangeString: string) => void;
   selectedRange: Set<HandCombo>;
   disabledCards?: Card[];
+  colorTheme?: 'emerald' | 'purple';
 }
 
-export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [] }: RangeMatrixProps) {
+export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [], colorTheme = 'emerald' }: RangeMatrixProps) {
   const [hoveredCell, setHoveredCell] = useState<{ row: number; col: number } | null>(null);
   const [rangeText, setRangeText] = useState('');
   const [isDragging, setIsDragging] = useState(false);
@@ -138,7 +139,11 @@ export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [] }
     const isSelected = selectedRange.has(combo);
     const isHovered = hoveredCell?.row === row && hoveredCell?.col === col;
 
-    if (isSelected) return 'bg-gradient-to-br from-emerald-500/80 to-teal-600/80 text-white border-emerald-400/60';
+    if (isSelected) {
+      return colorTheme === 'purple'
+        ? 'bg-gradient-to-br from-purple-500/80 to-pink-600/80 text-white border-purple-400/60'
+        : 'bg-gradient-to-br from-emerald-500/80 to-teal-600/80 text-white border-emerald-400/60';
+    }
     if (isHovered) return 'bg-gray-600 text-white border-gray-500';
     if (row === col) return 'bg-gradient-to-br from-amber-500/20 to-orange-500/20 text-amber-300 border-gray-600';
     if (row < col) return 'bg-gradient-to-br from-cyan-500/20 to-blue-500/20 text-cyan-300 border-gray-600';
@@ -151,10 +156,13 @@ export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [] }
     >
       <div className="flex items-center justify-between mb-2 sm:mb-3">
         <h3 className="text-white font-semibold flex items-center gap-2 text-sm sm:text-base">
-          <LayoutGrid className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400" />
+          <LayoutGrid className={`w-4 h-4 sm:w-5 sm:h-5 ${colorTheme === 'purple' ? 'text-purple-400' : 'text-emerald-400'}`} />
           Range 选择器
         </h3>
-        <span className="text-emerald-400 text-xs font-mono bg-emerald-500/10 px-2 py-1 rounded">
+        <span className={`text-xs font-mono px-2 py-1 rounded ${colorTheme === 'purple'
+            ? 'text-purple-400 bg-purple-500/10'
+            : 'text-emerald-400 bg-emerald-500/10'
+          }`}>
           {stats.count} combos ({stats.percentage}%)
         </span>
       </div>
@@ -224,7 +232,8 @@ export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [] }
           onKeyDown={(e) => { if (e.key === 'Enter') handleTextSubmit(); }}
           onBlur={handleTextSubmit}
           placeholder="输入: AA, KK, AKs+, JJ-TT..."
-          className="flex-1 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 min-h-[36px] font-mono border border-gray-700 focus:outline-none focus:border-emerald-500"
+          className={`flex-1 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 min-h-[36px] font-mono border border-gray-700 focus:outline-none ${colorTheme === 'purple' ? 'focus:border-purple-500' : 'focus:border-emerald-500'
+            }`}
         />
       </div>
     </div>
