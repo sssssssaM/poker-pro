@@ -367,7 +367,7 @@ self.onmessage = function (event) {
   if (msg.type !== 'simulate') return;
 
   const startTime = performance.now();
-  const { playerHand, playerRange, communityCards, opponentType, opponentCount, simulations } = msg;
+  const { playerHand, playerRange, communityCards, opponentType, opponentCount, simulations, villainRange } = msg;
 
   // --- 准备阶段 ---
   const boardCards = (communityCards || []).map(c => parseCardObj(c));
@@ -382,7 +382,9 @@ self.onmessage = function (event) {
   }
 
   // 构建 opponent combos
-  const oppRangeNames = OPPONENT_RANGES[opponentType] || [];
+  const oppRangeNames = opponentType === 'custom'
+    ? (villainRange || [])
+    : (OPPONENT_RANGES[opponentType] || []);
   const useOppRange = opponentType !== 'random' && oppRangeNames.length > 0;
   const oppCombos = useOppRange ? expandLegacyRange(oppRangeNames) : null;
 

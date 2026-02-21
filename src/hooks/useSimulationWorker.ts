@@ -44,7 +44,8 @@ interface UseSimulationWorkerReturn {
     opponentType: OpponentType,
     opponentCount: number,
     simulations: number,
-    playerRange?: HandCombo[]
+    playerRange?: HandCombo[],
+    villainRange?: HandCombo[]
   ) => void;
   cancelSimulation: () => void;
   progressDetail: {
@@ -85,7 +86,8 @@ export function useSimulationWorker(): UseSimulationWorkerReturn {
       opponentType: OpponentType,
       opponentCount: number,
       simulations: number,
-      playerRange?: HandCombo[]
+      playerRange?: HandCombo[],
+      villainRange?: HandCombo[]
     ) => {
       if (workerRef.current) {
         workerRef.current.terminate();
@@ -140,7 +142,7 @@ export function useSimulationWorker(): UseSimulationWorkerReturn {
       setEquityResult(null);
       setProgressDetail(null);
 
-      // 【关键修复】把 playerRange 发送给 Worker
+      // 【关键修复】把 playerRange + villainRange 发送给 Worker
       worker.postMessage({
         type: 'simulate',
         playerHand,
@@ -148,7 +150,8 @@ export function useSimulationWorker(): UseSimulationWorkerReturn {
         communityCards: communityCards || [],
         opponentType,
         opponentCount,
-        simulations
+        simulations,
+        villainRange
       });
     },
     []

@@ -17,6 +17,7 @@ import {
   TrendingUp
 } from 'lucide-react';
 import { Card, Street, OpponentType, HandCombo } from '@/lib/poker/pro-types';
+import { parseRangeString } from '@/lib/poker/range-parser';
 import { RangeMatrix, CommunityCardMatrix } from './HandMatrix';
 import { AnalysisTabs } from './AnalysisTabs';
 import { useSimulationWorker } from '@/hooks/useSimulationWorker';
@@ -48,6 +49,7 @@ const OPPONENT_PILLS: { type: OpponentType; label: string; emoji: string }[] = [
   { type: 'loose', label: 'LAG', emoji: '🔥' },
   { type: 'passive', label: '松被动', emoji: '🐢' },
   { type: 'nit', label: 'Nit', emoji: '🔒' },
+  { type: 'custom', label: '自定义', emoji: '⚙️' },
 ];
 
 const STREETS = [
@@ -69,6 +71,7 @@ export function PokerCalculatorPro() {
   // ====== 对手设置 ======
   const [opponentCount, setOpponentCount] = useState(1);
   const [opponentType, setOpponentType] = useState<OpponentType>('random');
+  const [villainRangeStr, setVillainRangeStr] = useState('');
 
   // ====== 筹码设置 ======
   const [potSize, setPotSize] = useState(100);
@@ -101,6 +104,12 @@ export function PokerCalculatorPro() {
   } = useSimulationWorker();
 
   const hasRange = playerRange.size > 0;
+
+  // 解析自定义 villain range
+  const parsedVillainRange = useMemo(() => {
+    if (opponentType !== 'custom' || !villainRangeStr.trim()) return undefined;
+    return Array.from(parseRangeString(villainRangeStr));
+  }, [opponentType, villainRangeStr]);
 
   // 底池赔率
   const potOddsResult = useMemo(() =>
@@ -206,11 +215,13 @@ export function PokerCalculatorPro() {
     setPlayerRange(combos);
     setRangeString(str);
     if (combos.size > 0) {
+      const vr = opponentType === 'custom' && villainRangeStr.trim()
+        ? Array.from(parseRangeString(villainRangeStr)) : undefined;
       setTimeout(() => {
-        runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(combos));
+        runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(combos), vr);
       }, 50);
     }
-  }, [communityCards, opponentType, opponentCount, simulations, runSimulation]);
+  }, [communityCards, opponentType, opponentCount, simulations, runSimulation, villainRangeStr]);
 
   const updateStreetByCardCount = useCallback((cardCount: number) => {
     if (cardCount === 0) setStreet('preflop');
@@ -224,40 +235,48 @@ export function PokerCalculatorPro() {
       const newCards = [...prev, card];
       updateStreetByCardCount(newCards.length);
       if (hasRange) {
+        const vr = opponentType === 'custom' && villainRangeStr.trim()
+          ? Array.from(parseRangeString(villainRangeStr)) : undefined;
         setTimeout(() => {
-          runSimulation(null, newCards, opponentType, opponentCount, simulations, Array.from(playerRange));
+          runSimulation(null, newCards, opponentType, opponentCount, simulations, Array.from(playerRange), vr);
         }, 50);
       }
       return newCards;
     });
-  }, [hasRange, playerRange, opponentType, opponentCount, simulations, runSimulation, updateStreetByCardCount]);
+  }, [hasRange, playerRange, opponentType, opponentCount, simulations, runSimulation, updateStreetByCardCount, villainRangeStr]);
 
   const handleCommunityCardRemove = useCallback((index: number) => {
     setCommunityCards(prev => {
       const newCards = prev.filter((_, i) => i !== index);
       updateStreetByCardCount(newCards.length);
       if (hasRange) {
+        const vr = opponentType === 'custom' && villainRangeStr.trim()
+          ? Array.from(parseRangeString(villainRangeStr)) : undefined;
         setTimeout(() => {
-          runSimulation(null, newCards, opponentType, opponentCount, simulations, Array.from(playerRange));
+          runSimulation(null, newCards, opponentType, opponentCount, simulations, Array.from(playerRange), vr);
         }, 50);
       }
       return newCards;
     });
-  }, [hasRange, playerRange, opponentType, opponentCount, simulations, runSimulation, updateStreetByCardCount]);
+  }, [hasRange, playerRange, opponentType, opponentCount, simulations, runSimulation, updateStreetByCardCount, villainRangeStr]);
 
   const handleOpponentTypeChange = useCallback((type: OpponentType) => {
     setOpponentType(type);
     if (hasRange) {
-      runSimulation(null, communityCards, type, opponentCount, simulations, Array.from(playerRange));
+      const vr = type === 'custom' && villainRangeStr.trim()
+        ? Array.from(parseRangeString(villainRangeStr)) : undefined;
+      runSimulation(null, communityCards, type, opponentCount, simulations, Array.from(playerRange), vr);
     }
-  }, [hasRange, playerRange, communityCards, opponentCount, simulations, runSimulation]);
+  }, [hasRange, playerRange, communityCards, opponentCount, simulations, runSimulation, villainRangeStr]);
 
   const handleOpponentCountChange = useCallback((count: number) => {
     setOpponentCount(count);
     if (hasRange) {
-      runSimulation(null, communityCards, opponentType, count, simulations, Array.from(playerRange));
+      const vr = opponentType === 'custom' && villainRangeStr.trim()
+        ? Array.from(parseRangeString(villainRangeStr)) : undefined;
+      runSimulation(null, communityCards, opponentType, count, simulations, Array.from(playerRange), vr);
     }
-  }, [hasRange, playerRange, communityCards, opponentType, simulations, runSimulation]);
+  }, [hasRange, playerRange, communityCards, opponentType, simulations, runSimulation, villainRangeStr]);
 
   const handleStreetChange = useCallback((s: Street) => {
     setStreet(s);
@@ -314,7 +333,7 @@ export function PokerCalculatorPro() {
       <div className="text-center py-8">
         <AlertCircle className="w-10 h-10 mx-auto mb-2 text-red-400" />
         <p className="text-red-400 text-sm mb-3">{error}</p>
-        <button onClick={() => runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange))}
+        <button onClick={() => runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange), parsedVillainRange)}
           className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs mx-auto flex items-center gap-1">
           <RotateCcw className="w-3 h-3" /> 重试
         </button>
@@ -458,6 +477,29 @@ export function PokerCalculatorPro() {
                   </button>
                 ))}
               </div>
+              {opponentType === 'custom' && (
+                <div className="mt-2">
+                  <input
+                    type="text"
+                    value={villainRangeStr}
+                    onChange={(e) => setVillainRangeStr(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && hasRange) {
+                        const vr = Array.from(parseRangeString(villainRangeStr));
+                        runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange), vr);
+                      }
+                    }}
+                    onBlur={() => {
+                      if (hasRange && villainRangeStr.trim()) {
+                        const vr = Array.from(parseRangeString(villainRangeStr));
+                        runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange), vr);
+                      }
+                    }}
+                    placeholder="输入: JJ+, AKs, QQ-TT..."
+                    className="w-full bg-white/5 text-white text-xs rounded-lg px-3 py-2 font-mono border border-gray-700 focus:outline-none focus:border-purple-500 placeholder-gray-600"
+                  />
+                </div>
+              )}
             </div>
 
             {/* Opponent count + simulations */}
@@ -599,6 +641,29 @@ export function PokerCalculatorPro() {
                     </button>
                   ))}
                 </div>
+                {opponentType === 'custom' && (
+                  <div className="mt-2">
+                    <input
+                      type="text"
+                      value={villainRangeStr}
+                      onChange={(e) => setVillainRangeStr(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && hasRange) {
+                          const vr = Array.from(parseRangeString(villainRangeStr));
+                          runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange), vr);
+                        }
+                      }}
+                      onBlur={() => {
+                        if (hasRange && villainRangeStr.trim()) {
+                          const vr = Array.from(parseRangeString(villainRangeStr));
+                          runSimulation(null, communityCards, opponentType, opponentCount, simulations, Array.from(playerRange), vr);
+                        }
+                      }}
+                      placeholder="输入: JJ+, AKs, QQ-TT..."
+                      className="w-full bg-gray-700 text-white text-xs rounded-lg px-3 py-2 font-mono border border-gray-600 focus:outline-none focus:border-purple-500 placeholder-gray-500"
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Chips (desktop) */}

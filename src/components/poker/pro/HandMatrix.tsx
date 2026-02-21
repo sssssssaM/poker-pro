@@ -160,10 +160,10 @@ export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [] }
       </div>
 
       {/* 📱 居中且自适应的矩阵容器 */}
-      <div className="flex justify-center w-full overflow-visible">
+      <div className="w-full overflow-x-auto no-scrollbar pb-2">
         <div
           ref={matrixRef}
-          className="inline-block origin-top scale-[0.80] sm:scale-[0.9] md:scale-100 touch-none"
+          className="inline-block origin-top-left scale-[0.70] sm:scale-[0.85] md:scale-100 touch-none"
           onTouchMove={handleTouchMove}
         >
           <div className="flex">
