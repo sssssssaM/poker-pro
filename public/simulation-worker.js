@@ -382,9 +382,12 @@ self.onmessage = function (event) {
   }
 
   // 构建 opponent combos
-  const oppRangeNames = opponentType === 'custom'
-    ? (villainRange || [])
-    : (OPPONENT_RANGES[opponentType] || []);
+  let oppRangeNames = [];
+  if (opponentType === 'custom' && villainRange && villainRange.length > 0) {
+    oppRangeNames = villainRange;
+  } else {
+    oppRangeNames = OPPONENT_RANGES[opponentType] || [];
+  }
   const useOppRange = opponentType !== 'random' && oppRangeNames.length > 0;
   const oppCombos = useOppRange ? expandLegacyRange(oppRangeNames) : null;
 

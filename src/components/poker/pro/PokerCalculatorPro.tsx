@@ -554,7 +554,7 @@ export function PokerCalculatorPro() {
       )}
 
       {/* ====== MAIN CONTENT ====== */}
-      <main className="max-w-7xl mx-auto lg:px-6 lg:py-6">
+      <main className="max-w-7xl mx-auto lg:px-6 lg:py-6 pb-24 lg:pb-12">
         <div className="lg:grid lg:grid-cols-3 lg:gap-6">
 
           {/* ======= LEFT: Range Matrix (Mobile: full-width king) ======= */}
@@ -692,7 +692,7 @@ export function PokerCalculatorPro() {
 
           {/* ======= RIGHT: Results (Desktop only — inline) ======= */}
           <div className="hidden lg:block lg:col-span-2">
-            <div className="bg-gray-800/40 rounded-2xl p-6">
+            <div className="bg-gray-800/40 rounded-2xl p-6 h-[calc(100vh-100px)] overflow-y-auto custom-scrollbar">
               {renderAnalysis()}
             </div>
           </div>
