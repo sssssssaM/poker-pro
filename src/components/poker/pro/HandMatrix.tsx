@@ -160,8 +160,8 @@ export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [], 
           Range 选择器
         </h3>
         <span className={`text-xs font-mono px-2 py-1 rounded ${colorTheme === 'purple'
-            ? 'text-purple-400 bg-purple-500/10'
-            : 'text-emerald-400 bg-emerald-500/10'
+          ? 'text-purple-400 bg-purple-500/10'
+          : 'text-emerald-400 bg-emerald-500/10'
           }`}>
           {stats.count} combos ({stats.percentage}%)
         </span>
@@ -171,7 +171,7 @@ export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [], 
       <div className="w-full overflow-x-auto no-scrollbar pb-2">
         <div
           ref={matrixRef}
-          className="inline-block origin-top-left scale-[0.70] sm:scale-[0.85] md:scale-100 touch-none"
+          className="inline-block origin-top-left scale-[0.70] sm:scale-[0.85] lg:scale-[0.82] xl:scale-100 touch-none"
           onTouchMove={handleTouchMove}
         >
           <div className="flex">
