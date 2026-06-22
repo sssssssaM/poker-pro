@@ -59,6 +59,15 @@ const STREETS = [
   { id: 'river' as Street, label: '河牌' },
 ];
 
+const RANK_TO_IDX: Record<Card['rank'], number> = {
+  '2': 0, '3': 1, '4': 2, '5': 3, '6': 4, '7': 5, '8': 6,
+  '9': 7, 'T': 8, 'J': 9, 'Q': 10, 'K': 11, 'A': 12
+};
+
+const SUIT_TO_IDX: Record<Card['suit'], number> = { 's': 0, 'h': 1, 'd': 2, 'c': 3 };
+
+const cardToIdx = (card: Card) => RANK_TO_IDX[card.rank] * 4 + SUIT_TO_IDX[card.suit];
+
 export function PokerCalculatorPro() {
   // ====== Range 状态 ======
   const [playerRange, setPlayerRange] = useState<Set<HandCombo>>(new Set());
@@ -125,24 +134,11 @@ export function PokerCalculatorPro() {
     return calculateEVAdvanced(equityResult.win, potSize, betSize, foldEquity);
   }, [equityResult, potSize, betSize, foldEquity]);
 
-  // ====== Card → CardIndex 转换 ======
-  const RANK_TO_IDX: Record<string, number> = {
-    '2': 0, '3': 1, '4': 2, '5': 3, '6': 4, '7': 5, '8': 6,
-    '9': 7, 'T': 8, 'J': 9, 'Q': 10, 'K': 11, 'A': 12
-  };
-  const SUIT_TO_IDX: Record<string, number> = { 's': 0, 'h': 1, 'd': 2, 'c': 3 };
-  const cardToIdx = (card: Card) => RANK_TO_IDX[card.rank] * 4 + SUIT_TO_IDX[card.suit];
+  const canRunAdvancedAnalysis = hasRange && communityCards.length >= 3;
 
   // ====== Phase 2: 延迟加载分析计算 ======
   useEffect(() => {
-    // 需要 range 和 flop 以上才分析
-    if (!hasRange || communityCards.length < 3) {
-      setOutsResult(null);
-      setNutResult(null);
-      setBlockerResult(null);
-      setStreetEquity(null);
-      return;
-    }
+    if (!canRunAdvancedAnalysis) return;
 
     // 取 range 中第一个 combo 作为代表手牌
     const combos = Array.from(playerRange);
@@ -181,8 +177,6 @@ export function PokerCalculatorPro() {
           setOutsResult(m.detectOuts(heroCards, boardIdx));
         } catch { setOutsResult(null); }
       });
-    } else {
-      setOutsResult(null);
     }
 
     // Nuts
@@ -210,7 +204,7 @@ export function PokerCalculatorPro() {
     });
 
     return () => { cancelled = true; };
-  }, [communityCards, playerRange, equityResult]);
+  }, [canRunAdvancedAnalysis, communityCards, playerRange]);
 
   // Hero Range 变化时触发模拟
   const handleRangeChange = useCallback((combos: Set<HandCombo>, str: string) => {
@@ -360,12 +354,12 @@ export function PokerCalculatorPro() {
           rangeString={rangeString}
           equityByCombo={equityResult.equityByCombo}
           equityHistogram={equityResult.equityHistogram}
-          outsResult={outsResult}
+          outsResult={canRunAdvancedAnalysis && communityCards.length <= 4 ? outsResult : null}
           potOddsResult={potOddsResult}
           evResult={evResult}
-          blockerResult={blockerResult}
-          streetEquity={streetEquity}
-          nutResult={nutResult}
+          blockerResult={canRunAdvancedAnalysis ? blockerResult : null}
+          streetEquity={canRunAdvancedAnalysis ? streetEquity : null}
+          nutResult={canRunAdvancedAnalysis ? nutResult : null}
           foldEquity={foldEquity}
           onFoldEquityChange={setFoldEquity}
           potSize={potSize}

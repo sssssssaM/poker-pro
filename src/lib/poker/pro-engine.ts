@@ -79,7 +79,7 @@ export function estimateEquityFromOuts(outs: number, street: 'flop' | 'turn'): n
 }
 
 // 底池赔率转百分比
-export function potOddsToPercentage(potOdds: number): number {
+export function potOddsToPercentage(potOdds: number | string): number {
   // potOdds 格式: "2:1" 或 "3:2"
   if (typeof potOdds === 'string') {
     const [pot, bet] = potOdds.split(':').map(Number);

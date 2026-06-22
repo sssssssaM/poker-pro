@@ -21,6 +21,9 @@ export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [], 
 
   const stats = useMemo(() => countCombos(selectedRange, disabledCards), [selectedRange, disabledCards]);
   const rangeString = useMemo(() => comboSetToString(selectedRange), [selectedRange]);
+  const matrixGridStyle: React.CSSProperties = {
+    gridTemplateColumns: '1.35rem repeat(13, minmax(0, 1fr))',
+  };
 
   // 电脑端：处理点击和鼠标拖拽
   const handleCellMouseDown = useCallback((row: number, col: number) => {
@@ -167,23 +170,34 @@ export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [], 
         </span>
       </div>
 
-      {/* 📱 居中且自适应的矩阵容器 */}
-      <div className="w-full overflow-x-auto no-scrollbar pb-2">
+      <div className="mb-2 flex items-center gap-3 text-[10px] text-gray-500">
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-sm bg-amber-400/60" /> 对子
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-sm bg-cyan-400/60" /> 同花
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-sm bg-gray-500" /> 非同花
+        </span>
+      </div>
+
+      {/* 真实响应式矩阵：避免 transform scale 造成布局裁切 */}
+      <div className="w-full pb-2">
         <div
           ref={matrixRef}
-          className="inline-block origin-top-left scale-[0.70] sm:scale-[0.85] lg:scale-[0.82] xl:scale-100 touch-none"
+          className="grid w-full gap-0.5 touch-none sm:gap-1"
+          style={matrixGridStyle}
           onTouchMove={handleTouchMove}
         >
-          <div className="flex">
-            <div className="w-8 h-8" />
-            {RANKS.map(rank => (
-              <div key={rank} className="w-9 h-8 flex items-center justify-center text-gray-400 text-sm font-medium">{rank}</div>
-            ))}
-          </div>
+          <div className="aspect-square" />
+          {RANKS.map(rank => (
+            <div key={rank} className="flex aspect-square items-center justify-center text-[10px] font-medium text-gray-400 sm:text-xs">{rank}</div>
+          ))}
 
           {RANKS.map((rowRank, row) => (
-            <div key={row} className="flex">
-              <div className="w-8 h-9 flex items-center justify-center text-gray-400 text-sm font-medium">{rowRank}</div>
+            <div key={row} className="contents">
+              <div className="flex aspect-square items-center justify-center text-[10px] font-medium text-gray-400 sm:text-xs">{rowRank}</div>
               {RANKS.map((_, col) => {
                 const combo = getComboName(row, col);
                 return (
@@ -197,8 +211,9 @@ export function RangeMatrix({ onRangeChange, selectedRange, disabledCards = [], 
                     onTouchStart={(e) => { e.preventDefault(); handleTouchStart(row, col); }}
                     onTouchEnd={handleTouchEnd}
                     className={`
-                      w-9 h-9 flex items-center justify-center text-xs font-bold
-                      border transition-all duration-75 rounded cursor-pointer
+                      flex aspect-square min-w-0 items-center justify-center rounded border
+                      text-[9px] font-bold transition-all duration-75 cursor-pointer
+                      sm:text-[10px] xl:text-xs
                       ${getCellStyle(row, col)}
                     `}
                   >
