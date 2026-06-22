@@ -5,6 +5,12 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 
 import { BarChart3 } from 'lucide-react';
 import { HandCombo } from '@/lib/poker/pro-types';
 
+type TooltipEntry = {
+    payload?: {
+        total?: number;
+    };
+};
+
 interface EquityChartProps {
     equityByCombo: Record<HandCombo, { wins: number; total: number; equity: number }>;
     className?: string;
@@ -66,8 +72,7 @@ export function EquityChart({ equityByCombo, className = '' }: EquityChartProps)
                                 color: '#fff',
                                 fontSize: '13px'
                             }}
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                            formatter={(value: number, _name: string, entry: any) => [
+                            formatter={(value: number, _name: string, entry: TooltipEntry) => [
                                 `${value}% (${entry?.payload?.total ?? 0} 样本)`,
                                 'Equity'
                             ]}
